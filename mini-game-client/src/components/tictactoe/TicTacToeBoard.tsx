@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-// import useWebSocket from "react-use-websocket";
+import { useEffect, useRef, useState } from "react";
 import Board from "../shared/Board";
 import Waiting from "../shared/Waiting";
 import { showAlert, showErrorAlert } from "../../utils/alerthelper";
@@ -17,7 +16,6 @@ export default function TicTacToeBoard({
   roomId,
   playerMark,
 }: TicTacToeBoardProps) {
-  // const { sendMessage, lastMessage, readyState } = useWebSocketContext();
   const [board, setBoard] = useState<string[][]>([
     ["", "", ""],
     ["", "", ""],
@@ -29,9 +27,9 @@ export default function TicTacToeBoard({
   const [chatMessages, setChatMessages] = useState<
     Array<{ sender: string; message: string; timestamp: string }>
   >([]);
+  const [playerMarkState, setPlayerMarkState] = useState<string>(playerMark);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
-  // const [message, setMessage] = useState([])
-  // const [isRoomActive, setIsRoomActive] = useState<boolean>(false);
+  const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
 
   const { sendMessage, lastMessage } = useWebSocket(
     `ws://localhost:8080/ws?room_id=${roomId}&player_id=${playerId}`,
@@ -57,8 +55,11 @@ export default function TicTacToeBoard({
     }
   );
 
+  const lastMessageRef = useRef<string | null>(null); // untuk melacak pesan terakhir
+
   useEffect(() => {
-    if (lastMessage !== null) {
+    if (lastMessage !== null && lastMessage.data !== lastMessageRef.current) {
+      lastMessageRef.current = lastMessage.data; // untuk update pesan terakhir
       const messageFromServer = JSON.parse(lastMessage.data);
 
       if (messageFromServer.action === "TICTACTOE_GAME_STATE") {
@@ -89,20 +90,38 @@ export default function TicTacToeBoard({
         }
       }
 
+      if (messageFromServer.action === "MARK_UPDATE") {
+        const marks = messageFromServer.message.marks;
+        console.log("marks", marks);
+        console.log("messageFromServer MARK_UPDATE =>", messageFromServer);
+        
+        if (marks && marks[playerId]) {
+          const newMark = marks[playerId];
+          setPlayerMarkState(newMark);
+          localStorage.setItem("playerMark", newMark);
+        }
+      }
+
       if (messageFromServer.action === "CHAT_MESSAGE") {
-        console.log("messageFromServer", messageFromServer);
+        // console.log("messageFromServer", messageFromServer);
         const newMessage = {
-          sender: messageFromServer.sender.player_id, // Nama pengirim
-          message: messageFromServer.message, // Isi pesan
-          timestamp: messageFromServer.timestamp, // Waktu pengiriman
+          sender: messageFromServer.sender.player_id, // nama pengirim
+          message: messageFromServer.message, // isi pesan
+          timestamp: messageFromServer.timestamp, // waktu pengiriman
         };
 
         setChatMessages((prevMessages) => [...prevMessages, newMessage]);
+
+        if (!isChatOpen) {
+          setHasNewMessage(true);
+          const audio = new Audio("/sounds/notification.mp3");
+          audio.play();
+        }
       }
     }
-  }, [lastMessage, setIsActive, playerId]);
+  }, [lastMessage, setIsActive, playerId, isChatOpen]);
 
-  console.log("chatMessages", chatMessages);
+  // console.log("chatMessages", chatMessages);
 
   const handleCellClick = (row: number, col: number) => {
     if (!isActive) {
@@ -110,7 +129,7 @@ export default function TicTacToeBoard({
       return;
     }
 
-    if (turn !== playerMark) {
+    if (turn !== playerMarkState) {
       alert("It's not your turn!");
       return;
     }
@@ -127,11 +146,16 @@ export default function TicTacToeBoard({
     const chatMessage = {
       action: "CHAT_MESSAGE",
       message: message,
-      sender: { player_id: playerId }, // Nama pemain
-      time: new Date().toISOString(), // Waktu pengiriman
+      sender: { player_id: playerId },
+      time: new Date().toISOString(),
     };
 
     sendMessage(JSON.stringify(chatMessage));
+  };
+
+  const handleOpenChat = () => {
+    setIsChatOpen(true);
+    setHasNewMessage(false);
   };
 
   return (
@@ -163,7 +187,7 @@ export default function TicTacToeBoard({
                 Enjoy the Game, "{playerId}"
               </h2>
               <div className="flex flex-wrap justify-center space-x-2 text-sm md:text-xl">
-                <h2>Your Mark: "{playerMark}"</h2>
+                <h2>Your Mark: "{playerMarkState}"</h2>
                 <span className="text-primary-content">|</span>
                 <h2>Turn: "{turn}"</h2>
                 <span className="text-primary-content">|</span>
@@ -180,12 +204,15 @@ export default function TicTacToeBoard({
               onSendMessage={handleSendMessage}
             />
           </div>
-          <div className="block md:hidden">
+          <div className="block md:hidden mt-2 relative">
             <button
-              className="bg-blue-500 text-white p-2 rounded"
-              onClick={() => setIsChatOpen(true)}
+              className="btn btn-primary btn-outline p-2"
+              onClick={handleOpenChat}
             >
               Open Chat
+              {hasNewMessage && (
+                <span className="absolute top-0 right-0 badge badge-primary badge-xs transform translate-x-1/2 -translate-y-1/2"></span>
+              )}
             </button>
           </div>
         </div>
@@ -193,15 +220,9 @@ export default function TicTacToeBoard({
 
       {isChatOpen && (
         <div className="fixed md:hidden inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
-          <div className="bg-white p-2 rounded-lg w-11/12">
-            <button
-              className="btn btn-primary"
-              onClick={() => setIsChatOpen(false)}
-            >
-              Close Chat
-            </button>
+          <div className="bg-base-100 py-0 rounded-lg w-11/12">
             <ChatOpened
-              setOpenChatOpened={() => {}}
+              setOpenChatOpened={() => setIsChatOpen(false)}
               userName={playerId}
               messages={chatMessages}
               onSendMessage={handleSendMessage}

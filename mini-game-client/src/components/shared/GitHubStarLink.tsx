@@ -1,5 +1,5 @@
 export default function GitHubStarLink() {
-  const href = "https://github.com/";
+  const href = "https://github.com/tsaqiffatih/mini-game";
 
   return (
     <a
@@ -7,6 +7,7 @@ export default function GitHubStarLink() {
       target="_blank"
       className="inline-flex bottom-0 bg-gray-100 border border-primary justify-between items-center p-1 pr-4 mb-10 text-sm rounded-full hover:bg-gray-200"
       role="alert"
+      rel="noopener noreferrer"
     >
       <span className="text-xs bg-primary text-base-100 rounded-full sm:px-4 px-2.5 py-1.5 mr-3">
         Repository

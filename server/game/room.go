@@ -82,6 +82,9 @@ func (rm *RoomManager) createGameState(gameType string) interface{} {
 	case "tictactoe":
 		log.Println("masuk tictactoe")
 		return tictactoe.NewGameState()
+	case "chess":
+		log.Println("masuk chess")
+		return "chess"
 	default:
 		log.Println("gameType not found")
 		return nil
@@ -105,6 +108,7 @@ func (rm *RoomManager) JoinRoom(roomID string, player *Player) (*JoinRoomRespons
 	room.Players[player.ID] = player
 	log.Println("gameState type Join Room:", reflect.TypeOf(room.GameState))
 
+	// mengatur mark player untuk game tictactoe
 	if tictactoeGameState, ok := room.GameState.(*tictactoe.TictactoeGameState); ok {
 		if len(room.Players) < 2 {
 			player.Mark = "X"
@@ -117,6 +121,17 @@ func (rm *RoomManager) JoinRoom(roomID string, player *Player) (*JoinRoomRespons
 		}
 	} else {
 		log.Println("game state is not *tictactoe.TictactoeGameState")
+	}
+
+	// mengatur mark player untuk game chess
+	if room.GameState == "chess" {
+		if len(room.Players) < 2 {
+			log.Println("player mark white")
+			player.Mark = "White"
+		} else {
+			log.Println("player mark black")
+			player.Mark = "Black"
+		}
 	}
 
 	if len(room.Players) == 2 {

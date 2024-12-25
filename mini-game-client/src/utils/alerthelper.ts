@@ -23,7 +23,7 @@ export const showSuccessAlert = (message: string) => {
 
 export const showErrorAlert = (message: string) => {
   return showAlert({
-    title: "Error",
+    title: "Uppsss...",
     text: message,
     icon: "error",
   });

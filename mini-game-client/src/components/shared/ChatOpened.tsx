@@ -52,13 +52,13 @@ function ChatOpened({
   }, [usersMessages]);
 
   return (
-    <div className="flex sm:pt-10 flex-col max-h-screen max-w-screen-sm rounded-lg overflow-hidden my-3">
+    <div className="flex sm:pt-10 flex-col max-h-screen max-w-screen-sm rounded-lg overflow-hidden">
       {/* Header */}
       <div className="bg-gray-200 p-3 border-x border-t rounded-t-lg border-black flex justify-between items-center">
         <h3 className="text-lg font-semibold text-gray-900">Chat</h3>
         <button
           type="button"
-          className="btn btn-sm btn-circle btn-ghost"
+          className="btn btn-sm btn-circle sm:hidden btn-ghost"
           onClick={() => setOpenChatOpened(false)}
           aria-label="Close chat"
         >
@@ -157,9 +157,9 @@ function ChatOpened({
           >
             <path
               fill="currentColor"
-              fill-rule="evenodd"
+              fillRule="evenodd"
               d="M2.345 2.245a1 1 0 0 1 1.102-.14l18 9a1 1 0 0 1 0 1.79l-18 9a1 1 0 0 1-1.396-1.211L4.613 13H10a1 1 0 1 0 0-2H4.613L2.05 3.316a1 1 0 0 1 .294-1.071z"
-              clip-rule="evenodd"
+              clipRule="evenodd"
             />
           </svg>
         </button>

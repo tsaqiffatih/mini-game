@@ -76,7 +76,7 @@ export default function Lobby({
         localStorage.setItem("roomId", roomId);
         setTimeout(() => {
           onRoomIdGenerated(roomId, playerMark);
-          setIsLoadingNewGame(false);
+          setIsLoadingJoinGame(false);
         }, 2000);
       }
     } catch (error: any) {
@@ -84,16 +84,16 @@ export default function Lobby({
         showErrorAlert("Player not found. Please register first.");
         localStorage.removeItem("playerId");
         window.location.reload();
-        setIsLoadingNewGame(false);
+        setIsLoadingJoinGame(false);
       } else if (error.response.data.message === "Room not found") {
         showErrorAlert("Room not found. Please check the room ID.");
-        setIsLoadingNewGame(false);
+        setIsLoadingJoinGame(false);
       } else {
+        setIsLoadingNewGame(false);
         showErrorAlert(
           error.response.data.message ||
             "An error occurred while Joining the room. Please try again."
         );
-        setIsLoadingNewGame(false);
       }
       console.log(error.response.message);
     }
@@ -101,16 +101,16 @@ export default function Lobby({
 
   return (
     <div className="flex justify-center items-center h-screen">
-      <div className=" rounded-xl shadow-lg p-8 w-96 ring ring-primary outline outline-offset-4">
+      <div className=" rounded-xl shadow-lg p-8 sm:w-96 sm:max-w-sm ring ring-primary outline outline-offset-4">
         <div className="flex flex-col items-center">
           <button
             onClick={handleNewGame}
-            className="btn btn-primary btn-outline w-1/2 mb-4 shadow-xl text-base outline outline-offset-4"
+            className="btn btn-primary btn-outline w-1/2 mb-3 sm:mb-4 shadow-xl textarea-xs sm:text-base outline outline-offset-4"
             disabled={isLoadingNewGame}
           >
             {!isLoadingNewGame ? (
               <>
-                <span className="mr-2">
+                <span className="sm:mr-2 sm:w-6">
                   <svg
                     fill="currentColor"
                     width="25px"
@@ -153,7 +153,9 @@ export default function Lobby({
 
           <p className="text-base mt-4">-OR-</p>
 
-          <label className="text-base mt-2 mb-4">Enter Game Code</label>
+          <label className="text-sm sm:text-base mt-2 mb-4">
+            Enter Room Id
+          </label>
 
           <div className="flex w-full items-center justify-center space-x-7">
             <input
@@ -164,16 +166,15 @@ export default function Lobby({
             />
             <button
               onClick={handleJoinRoom}
-              className="btn btn-primary ml-2 text-base outline outline-offset-4"
+              className="btn btn-primary ml-2 text-sm sm:text-base outline outline-offset-4"
               disabled={isLoadingJoinGame}
             >
               {!isLoadingJoinGame ? (
                 <>
-                  <span className="mr-1">
+                  <span className="mr-1 sm:w-5">
                     <svg
                       fill="currentColor"
-                      width="20px"
-                      height="20px"
+                      className="w-5 h-5 sm:w-6 sm:h-6"
                       viewBox="0 0 16 16"
                       version="1.1"
                       xmlns="http://www.w3.org/2000/svg"

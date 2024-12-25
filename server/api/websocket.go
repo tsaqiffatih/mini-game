@@ -169,7 +169,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 
 	// goroutine for remove player after a delay
 	go func() {
-		time.Sleep(2 * time.Minute)
+		time.Sleep(30 * time.Second)
 		room.Mu.Lock()
 		defer room.Mu.Unlock()
 
@@ -181,18 +181,40 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 			delete(room.Players, playerID)
 			log.Printf("Player %s removed from room %s", playerID, roomID)
 
-			if tictactoeGameState, ok := room.GameState.(*tictactoe.TictactoeGameState); ok {
-				if len(room.Players) < 2 {
-					tictactoeGameState.IsActive = false
-					NotifyTicTacToeClients(roomManager, room.RoomID)
-				}
-			} else {
-				log.Println("game state is not *tictactoe.TictactoeGameState")
-			}
-
 			if len(room.Players) < 2 {
 				room.IsActive = false
-				NotifyTicTacToeClients(roomManager, room.RoomID)
+				if room.GameState == "chess" {
+					resetPlayerMarks(room)
+
+					playerMarks := make(map[string]string)
+					for _, player := range room.Players {
+						playerMarks[player.ID] = player.Mark
+					}
+					message := Message{
+						Action: "MARK_UPDATE",
+						Message: map[string]interface{}{
+							"marks": playerMarks,
+						},
+					}
+					NotifyToClientsInRoom(roomManager, room.RoomID, &message)
+				} else if tictactoeGameState, ok := room.GameState.(*tictactoe.TictactoeGameState); ok {
+					resetPlayerMarks(room)
+					playerMarks := make(map[string]string)
+					for _, player := range room.Players {
+						playerMarks[player.ID] = player.Mark
+					}
+					message := Message{
+						Action: "MARK_UPDATE",
+						Message: map[string]interface{}{
+							"marks": playerMarks,
+						},
+					}
+					tictactoeGameState.IsActive = false
+					NotifyToClientsInRoom(roomManager, room.RoomID, &message)
+					NotifyTicTacToeClients(roomManager, room.RoomID)
+				} else {
+					resetPlayerMarks(room)
+				}
 			}
 
 			// remove Room if no player is connected
@@ -265,21 +287,6 @@ func handleMakeMoveTictactoe(roomManager *game.RoomManager, payload tictactoe.Ti
 	}
 }
 
-// func NotifyToClientsInRoom(roomManager *game.RoomManager, roomID string, message *Message) {
-// 	room, err := roomManager.GetRoomByID(roomID)
-// 	if err != nil {
-// 		log.Println("Error getting room NotifyClients:", err)
-// 		return
-// 	}
-// 	for _, player := range room.Players {
-// 		if player.Conn != nil {
-// 			if err := player.Conn.WriteJSON(message); err != nil {
-// 				log.Println("Error sending message to client:", err)
-// 			}
-// 		}
-// 	}
-// }
-
 func NotifyToClientsInRoom(roomManager *game.RoomManager, roomID string, message *Message) {
 	room, err := roomManager.GetRoomByID(roomID)
 	if err != nil {
@@ -316,11 +323,7 @@ func sendGameState(player *game.Player, gameState *tictactoe.TictactoeGameState)
 		Winner:   winner,
 		IsActive: isActive,
 	}
-	// responseBytes, err := json.Marshal(response)
-	// if err != nil {
-	// 	log.Println("Error marshalling game state response:", err)
-	// 	return
-	// }
+
 	message := Message{
 		Action:  "TICTACTOE_GAME_STATE",
 		Message: response,
@@ -355,3 +358,44 @@ func sendErrorMessage(conn *websocket.Conn, message string) {
 		log.Println("Error sending error message:", err)
 	}
 }
+
+func resetPlayerMarks(room *game.Room) {
+	if _, ok := room.GameState.(*tictactoe.TictactoeGameState); ok {
+		// TicTacToe: Reset ke "X" jika tinggal satu pemain
+		for _, player := range room.Players {
+			player.Mark = "X"
+			log.Printf("Player %s mark reset to X for TicTacToe", player.ID)
+			break
+		}
+	} else if room.GameState == "chess" {
+		// Chess: Reset ke "white" jika tinggal satu pemain
+		for _, player := range room.Players {
+			player.Mark = "white"
+			log.Printf("Player %s mark reset to white for Chess", player.ID)
+			break
+		}
+
+		// notifyMarkChange(room)
+	} else {
+		log.Println("game state is not recognized")
+	}
+}
+
+// func notifyMarkChange(room *game.Room) {
+// 	room.Mu.Lock()
+// 	defer room.Mu.Unlock()
+
+// 	playerMarks := make(map[string]string)
+// 	for _, player := range room.Players {
+// 		playerMarks[player.ID] = player.Mark
+// 	}
+
+// 	message := Message{
+// 		Action: "MARK_UPDATE",
+// 		Message: map[string]interface{}{
+// 			"marks": playerMarks,
+// 		},
+// 	}
+
+// 	NotifyToClientsInRoom(room.RoomManager, room.RoomID, &message)
+// }
