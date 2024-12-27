@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { showErrorAlert } from "../utils/alerthelper";
 import Lobby from "../components/shared/Lobby";
+import ChessBoard from "../components/chess/ChessBoard";
 
 const ChessPage: React.FC = () => {
   const [playerId, setPlayerId] = useState<string>("");
@@ -29,7 +30,7 @@ const ChessPage: React.FC = () => {
   }, [navigate]);
 
   return (
-    <div>
+    <div className=" overflow-hidden p-2 h-screen flex flex-col items-center justify-center">
       {!roomId ? (
         <Lobby
           playerId={playerId}
@@ -37,12 +38,11 @@ const ChessPage: React.FC = () => {
           gameType="chess"
         />
       ) : (
-        <div>
-          <h1>Chess Board</h1>
-          <h2>Player ID: {playerId}</h2>
-          <h2>Room ID: {roomId}</h2>
-          <h2>Player Mark: {playerMark}</h2>
-        </div>
+        <ChessBoard
+          roomId={roomId}
+          playerId={playerId}
+          playerMark={playerMark}
+        />
       )}
     </div>
   );

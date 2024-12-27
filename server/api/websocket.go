@@ -106,8 +106,21 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 	// notify other players in the room about the new connection
 	NotifyToClientsInRoom(roomManager, roomID, &message)
 
-	if _, ok := room.GameState.(*tictactoe.TictactoeGameState); ok {
-		NotifyTicTacToeClients(roomManager, room.RoomID)
+	if room.GameState.GameType == "tictactoe" {
+		if _, ok := room.GameState.Data.(*tictactoe.TictactoeGameState); ok {
+			NotifyTicTacToeClients(roomManager, room.RoomID)
+		}
+	}
+
+	if room.GameState.GameType == "chess" {
+		if gameState, ok := room.GameState.Data.(string); ok && gameState != "" {
+			chessMessage := Message{
+				Action:  "CHESS_GAME_STATE",
+				Message: gameState,
+				Sender:  player,
+			}
+			NotifyToClientsInRoom(roomManager, roomID, &chessMessage)
+		}
 	}
 
 	done := make(chan struct{})
@@ -144,6 +157,22 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 					continue
 				}
 				handleMakeMoveTictactoe(roomManager, payload, conn)
+			case "CHESS_MOVE":
+				var payload struct {
+					FEN string `json:"fen"`
+				}
+				payloadBytes, err := json.Marshal(message.Message)
+				if err != nil {
+					sendErrorMessage(conn, "Invalid move payload")
+					log.Println("Error marshalling move payload:", err)
+					continue
+				}
+				if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+					sendErrorMessage(conn, "Invalid move payload")
+					log.Println("Error unmarshalling move payload:", err)
+					continue
+				}
+				handleChessMove(roomManager, roomID, playerID, payload.FEN, conn)
 			default:
 				log.Println("Invalid action:", message)
 				NotifyToClientsInRoom(roomManager, room.RoomID, &message)
@@ -169,7 +198,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 
 	// goroutine for remove player after a delay
 	go func() {
-		time.Sleep(30 * time.Second)
+		time.Sleep(2 * time.Minute)
 		room.Mu.Lock()
 		defer room.Mu.Unlock()
 
@@ -183,7 +212,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 
 			if len(room.Players) < 2 {
 				room.IsActive = false
-				if room.GameState == "chess" {
+				if room.GameState.GameType == "chess" {
 					resetPlayerMarks(room)
 
 					playerMarks := make(map[string]string)
@@ -197,21 +226,25 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 						},
 					}
 					NotifyToClientsInRoom(roomManager, room.RoomID, &message)
-				} else if tictactoeGameState, ok := room.GameState.(*tictactoe.TictactoeGameState); ok {
-					resetPlayerMarks(room)
-					playerMarks := make(map[string]string)
-					for _, player := range room.Players {
-						playerMarks[player.ID] = player.Mark
+				} else if room.GameState.GameType == "tictactoe" {
+					if tictactoeGameState, ok := room.GameState.Data.(*tictactoe.TictactoeGameState); ok {
+						resetPlayerMarks(room)
+						playerMarks := make(map[string]string)
+						for _, player := range room.Players {
+							playerMarks[player.ID] = player.Mark
+						}
+						message := Message{
+							Action: "MARK_UPDATE",
+							Message: map[string]interface{}{
+								"marks": playerMarks,
+							},
+						}
+						tictactoeGameState.IsActive = false
+						NotifyToClientsInRoom(roomManager, room.RoomID, &message)
+						NotifyTicTacToeClients(roomManager, room.RoomID)
+					} else {
+						log.Println("Error asserting gameState to *tictactoe.TictactoeGameState")
 					}
-					message := Message{
-						Action: "MARK_UPDATE",
-						Message: map[string]interface{}{
-							"marks": playerMarks,
-						},
-					}
-					tictactoeGameState.IsActive = false
-					NotifyToClientsInRoom(roomManager, room.RoomID, &message)
-					NotifyTicTacToeClients(roomManager, room.RoomID)
 				} else {
 					resetPlayerMarks(room)
 				}
@@ -228,6 +261,32 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 	}()
 }
 
+func handleChessMove(roomManager *game.RoomManager, roomID, playerID, fen string, conn *websocket.Conn) {
+	room, err := roomManager.GetRoomByID(roomID)
+	if err != nil {
+		log.Println("Room not found:", err)
+		sendErrorMessage(conn, "Room not found")
+		return
+	}
+
+	if room.GameState.GameType != "chess" {
+		log.Println("Invalid game type for chess move")
+		sendErrorMessage(conn, "Invalid game type for chess move")
+		return
+	}
+
+	room.GameState.Data = fen
+
+	// Notify other players in the room about the move
+	message := Message{
+		Action:  "CHESS_MOVE",
+		Message: fen,
+		Sender:  &game.Player{ID: playerID},
+	}
+
+	NotifyToClientsInRoom(roomManager, roomID, &message)
+}
+
 func NotifyTicTacToeClients(roomManager *game.RoomManager, roomID string) {
 	room, err := roomManager.GetRoomByID(roomID)
 	if err != nil {
@@ -238,10 +297,12 @@ func NotifyTicTacToeClients(roomManager *game.RoomManager, roomID string) {
 	gameState := room.GameState
 	for _, player := range room.Players {
 		if player.Conn != nil {
-			if tictactoeGameState, ok := gameState.(*tictactoe.TictactoeGameState); ok {
-				sendGameState(player, tictactoeGameState)
-			} else {
-				log.Println("Error asserting gameState to *tictactoe.TictactoeGameState")
+			if room.GameState.GameType == "tictactoe" {
+				if tictactoeGameState, ok := gameState.Data.(*tictactoe.TictactoeGameState); ok {
+					sendTictactoeGameState(player, tictactoeGameState)
+				} else {
+					log.Println("Error asserting gameState to *tictactoe.TictactoeGameState")
+				}
 			}
 		}
 	}
@@ -264,7 +325,7 @@ func handleMakeMoveTictactoe(roomManager *game.RoomManager, payload tictactoe.Ti
 
 	player.LastActive = time.Now()
 
-	tictactoeGameState, ok := room.GameState.(*tictactoe.TictactoeGameState)
+	tictactoeGameState, ok := room.GameState.Data.(*tictactoe.TictactoeGameState)
 	if !ok {
 		sendErrorMessage(conn, "Invalid game state")
 		log.Println("Invalid game state for room:", payload.RoomID)
@@ -314,7 +375,7 @@ func NotifyToClientsInRoom(roomManager *game.RoomManager, roomID string, message
 	}
 }
 
-func sendGameState(player *game.Player, gameState *tictactoe.TictactoeGameState) {
+func sendTictactoeGameState(player *game.Player, gameState *tictactoe.TictactoeGameState) {
 	board, turn, winner, isActive := gameState.GetState()
 	log.Println("Sending game state to client:", player.ID, board, turn, winner, isActive)
 	response := tictactoe.TicTacToeGameResponse{
@@ -360,42 +421,24 @@ func sendErrorMessage(conn *websocket.Conn, message string) {
 }
 
 func resetPlayerMarks(room *game.Room) {
-	if _, ok := room.GameState.(*tictactoe.TictactoeGameState); ok {
-		// TicTacToe: Reset ke "X" jika tinggal satu pemain
-		for _, player := range room.Players {
-			player.Mark = "X"
-			log.Printf("Player %s mark reset to X for TicTacToe", player.ID)
-			break
+	if room.GameState.GameType == "tictactoe" {
+		if _, ok := room.GameState.Data.(*tictactoe.TictactoeGameState); ok {
+			// ticTacToe: reset ke "X" jika tinggal satu pemain
+			for _, player := range room.Players {
+				player.Mark = "X"
+				log.Printf("Player %s mark reset to X for TicTacToe", player.ID)
+				break
+			}
 		}
-	} else if room.GameState == "chess" {
-		// Chess: Reset ke "white" jika tinggal satu pemain
+	} else if room.GameState.GameType == "chess" {
+		// chess: reset ke "white" jika tinggal satu pemain
 		for _, player := range room.Players {
 			player.Mark = "white"
 			log.Printf("Player %s mark reset to white for Chess", player.ID)
 			break
 		}
 
-		// notifyMarkChange(room)
 	} else {
 		log.Println("game state is not recognized")
 	}
 }
-
-// func notifyMarkChange(room *game.Room) {
-// 	room.Mu.Lock()
-// 	defer room.Mu.Unlock()
-
-// 	playerMarks := make(map[string]string)
-// 	for _, player := range room.Players {
-// 		playerMarks[player.ID] = player.Mark
-// 	}
-
-// 	message := Message{
-// 		Action: "MARK_UPDATE",
-// 		Message: map[string]interface{}{
-// 			"marks": playerMarks,
-// 		},
-// 	}
-
-// 	NotifyToClientsInRoom(room.RoomManager, room.RoomID, &message)
-// }

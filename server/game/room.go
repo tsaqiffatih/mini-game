@@ -14,9 +14,14 @@ import (
 type Room struct {
 	RoomID    string             `json:"room_id"`
 	Players   map[string]*Player `json:"players"`
-	GameState interface{}        `json:"game_state"`
+	GameState *GameRoomState     `json:"game_state"`
 	IsActive  bool               `json:"is_active"`
 	Mu        sync.Mutex
+}
+
+type GameRoomState struct {
+	GameType string      // Type of the game, e.g., "chess" or "tictactoe"
+	Data     interface{} // Game-specific data (e.g., FEN for chess)
 }
 
 type JoinRoomResponse struct {
@@ -66,10 +71,13 @@ func (rm *RoomManager) CreateRoom(roomID string, gameType string) (*Room, error)
 	log.Println("gameState type:", reflect.TypeOf(gameState))
 
 	room := &Room{
-		RoomID:    roomID,
-		Players:   make(map[string]*Player),
-		GameState: gameState,
-		IsActive:  false,
+		RoomID:  roomID,
+		Players: make(map[string]*Player),
+		GameState: &GameRoomState{
+			GameType: gameType,
+			Data:     gameState,
+		},
+		IsActive: false,
 	}
 
 	rm.rooms[roomID] = room
@@ -84,7 +92,7 @@ func (rm *RoomManager) createGameState(gameType string) interface{} {
 		return tictactoe.NewGameState()
 	case "chess":
 		log.Println("masuk chess")
-		return "chess"
+		return ""
 	default:
 		log.Println("gameType not found")
 		return nil
@@ -109,28 +117,30 @@ func (rm *RoomManager) JoinRoom(roomID string, player *Player) (*JoinRoomRespons
 	log.Println("gameState type Join Room:", reflect.TypeOf(room.GameState))
 
 	// mengatur mark player untuk game tictactoe
-	if tictactoeGameState, ok := room.GameState.(*tictactoe.TictactoeGameState); ok {
-		if len(room.Players) < 2 {
-			player.Mark = "X"
-		} else {
-			player.Mark = "O"
-		}
+	if room.GameState.GameType == "tictactoe" {
+		if tictactoeGameState, ok := room.GameState.Data.(*tictactoe.TictactoeGameState); ok {
+			if len(room.Players) < 2 {
+				player.Mark = "X"
+			} else {
+				player.Mark = "O"
+			}
 
-		if len(room.Players) == 2 {
-			tictactoeGameState.IsActive = true
+			if len(room.Players) == 2 {
+				tictactoeGameState.IsActive = true
+			}
+		} else {
+			log.Println("game state is not *tictactoe.TictactoeGameState")
 		}
-	} else {
-		log.Println("game state is not *tictactoe.TictactoeGameState")
 	}
 
 	// mengatur mark player untuk game chess
-	if room.GameState == "chess" {
+	if room.GameState.GameType == "chess" {
 		if len(room.Players) < 2 {
 			log.Println("player mark white")
-			player.Mark = "White"
+			player.Mark = "white"
 		} else {
 			log.Println("player mark black")
-			player.Mark = "Black"
+			player.Mark = "black"
 		}
 	}
 

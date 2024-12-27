@@ -4,6 +4,7 @@ import Waiting from "../shared/Waiting";
 import { showAlert, showErrorAlert } from "../../utils/alerthelper";
 import useWebSocket from "react-use-websocket";
 import ChatOpened from "../shared/ChatOpened";
+import { useNavigate } from "react-router-dom";
 
 interface TicTacToeBoardProps {
   playerId: string;
@@ -31,6 +32,8 @@ export default function TicTacToeBoard({
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
 
+  const navigate = useNavigate()
+
   const { sendMessage, lastMessage } = useWebSocket(
     `ws://localhost:8080/ws?room_id=${roomId}&player_id=${playerId}`,
     {
@@ -56,6 +59,33 @@ export default function TicTacToeBoard({
   );
 
   const lastMessageRef = useRef<string | null>(null); // untuk melacak pesan terakhir
+
+  useEffect(() => {
+    const handlePopState = () => {
+      showAlert({
+        title: "Leave Game?",
+        text: "Are you sure you want to leave the game? Your progress will be lost.",
+        icon: "warning",
+        showCancelButton: true,
+        confirmButtonText: "Yes, leave",
+        cancelButtonText: "No, stay",
+      }).then((result) => {
+        if (result.isConfirmed) {
+          localStorage.removeItem("roomId");
+          localStorage.removeItem("playerMark");
+          navigate("/");
+        } else {
+          window.history.pushState(null, "", window.location.href);
+        }
+      });
+    };
+
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [playerId, sendMessage, navigate]);
 
   useEffect(() => {
     if (lastMessage !== null && lastMessage.data !== lastMessageRef.current) {
@@ -94,7 +124,7 @@ export default function TicTacToeBoard({
         const marks = messageFromServer.message.marks;
         console.log("marks", marks);
         console.log("messageFromServer MARK_UPDATE =>", messageFromServer);
-        
+
         if (marks && marks[playerId]) {
           const newMark = marks[playerId];
           setPlayerMarkState(newMark);
@@ -159,7 +189,7 @@ export default function TicTacToeBoard({
   };
 
   return (
-    <div className="p-2 flex h-screen items-center justify-center overflow-hidden">
+    <div className="p-2 flex  items-center justify-center overflow-hidden">
       {roomId && !isActive && !winner && <Waiting roomId={roomId} />}
       {winner && winner !== "Draw" && (
         <div className="flex h-full items-center justify-center">

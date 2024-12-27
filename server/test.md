@@ -1,12 +1,12 @@
 1. room/create:
     curl -X POST http://localhost:8080/room/create -H "Content-Type: application/json" -d '{
-    "game_type": "tictactoe",
+    "game_type": "chess",
     "player_id": "player1"
     }'
 
 2. room/join:
     curl -X POST http://localhost:8080/room/join -H "Content-Type: application/json" -d '{
-    "room_id": "4M36ZS8",
+    "room_id": "B6QX48A",
     "player_id": "player2"
     }'
 
@@ -16,7 +16,7 @@
     }'
 
 4. websocket:
-    => wscat -c "ws://localhost:8080/ws?room_id=4M36ZS8&player_id=player2"
+    => wscat -c "ws://localhost:8080/ws?room_id=L7PVSR0&player_id=tsaqif"
 
     => {"action": "CHAT_MESSAGE","message": "Hello, everyone!","sender": {"id":"player1"}}
 

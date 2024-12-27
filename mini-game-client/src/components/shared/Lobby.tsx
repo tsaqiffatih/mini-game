@@ -29,6 +29,8 @@ export default function Lobby({
       if (data.success) {
         const newRoomId = data.data.room.room_id;
         const playerMark = data.data.player_mark;
+        console.log("data => ", data);
+        
 
         localStorage.setItem("roomId", newRoomId);
         localStorage.setItem("playerMark", playerMark);
@@ -100,7 +102,7 @@ export default function Lobby({
   };
 
   return (
-    <div className="flex justify-center items-center h-screen">
+    <div className="flex justify-center items-center">
       <div className=" rounded-xl shadow-lg p-8 sm:w-96 sm:max-w-sm ring ring-primary outline outline-offset-4">
         <div className="flex flex-col items-center">
           <button
