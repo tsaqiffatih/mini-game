@@ -13,7 +13,11 @@ interface ChessBoardProps {
   playerId: string;
   roomId: string;
   playerMark: string;
+  initialState?: string;
 }
+
+const backendUrl = "ws://localhost:8080/ws";
+// const backendUrl = "ws://vmntkmxm-8080.asse.devtunnels.ms/ws";
 
 const game = new Chess();
 
@@ -21,21 +25,23 @@ export default function ChessBoard({
   playerId,
   roomId,
   playerMark,
+  initialState
 }: ChessBoardProps) {
   const [playerMarkState, setPlayerMarkState] = useState<string>(playerMark);
-  const [fen, setFen] = useState<string>(game.fen());
-  const [isGameActive, setIsGameActive] = useState<boolean>(true);
+  const [fen, setFen] = useState<string>(initialState || game.fen());
+  const [isGameActive, setIsGameActive] = useState<boolean>(false);
   const [winner, setWinner] = useState<string>("");
   const [chatMessages, setChatMessages] = useState<
     Array<{ sender: string; message: string; timestamp: string }>
   >([]);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
+  const [resetRequest, setResetRequest] = useState<boolean>(false);
 
   const navigate = useNavigate();
 
   const { sendMessage, lastMessage } = useWebSocket(
-    `ws://localhost:8080/ws?room_id=${roomId}&player_id=${playerId}`,
+    `${backendUrl}?room_id=${roomId}&player_id=${playerId}`,
     {
       onOpen: () => console.log("websocket connected"),
       onError: (event) => {
@@ -65,7 +71,11 @@ export default function ChessBoard({
   // function for reset the game
   const resetGame = useCallback((): void => {
     game.reset();
+    console.log("game.reset() =>", game.fen());
+    
     setFen(game.fen());
+    setWinner("");
+    setIsGameActive(true);
   }, []);
 
   const checkGameStatus = useCallback(() => {
@@ -80,7 +90,8 @@ export default function ChessBoard({
           message: winnerMessage,
         })
       );
-      resetGame();
+      setWinner(winnerMessage);
+      setIsGameActive(false);
     } else if (
       game.isDraw() ||
       game.isThreefoldRepetition() ||
@@ -92,9 +103,10 @@ export default function ChessBoard({
           message: "The match ended in a draw.",
         })
       );
-      resetGame();
+      setWinner("Draw");
+      setIsGameActive(false);
     }
-  }, [resetGame, sendMessage]);
+  }, [sendMessage]);
 
   // function for moving the pieces
   const onDrop = useCallback(
@@ -133,6 +145,16 @@ export default function ChessBoard({
     [isMyTurn, sendMessage, checkGameStatus, playerId]
   );
 
+  const handleResetRequest = () => {
+    sendMessage(
+      JSON.stringify({
+        action: "REQUEST_RESET",
+        sender: { player_id: playerId },
+      })
+    );
+    setResetRequest(true);
+  };
+
   useEffect(() => {
     const handlePopState = () => {
       showAlert({
@@ -160,10 +182,15 @@ export default function ChessBoard({
     };
   }, [playerId, sendMessage, navigate]);
 
+  console.log("fen =>", fen);
+  
+
   useEffect(() => {
     if (!lastMessage) return;
 
     const { action, message, sender, timestamp } = JSON.parse(lastMessage.data);
+    console.log(JSON.parse(lastMessage.data));
+    
 
     if (action === "CHESS_MOVE") {
       if (message) {
@@ -200,18 +227,19 @@ export default function ChessBoard({
           text: "The other player has joined the room.",
           icon: "info",
           confirmButtonText: "Ok",
-        }).then(() => {
-          setIsGameActive(true);
         });
       }
     }
 
+    if (action === "START_GAME") {
+      setIsGameActive(true);
+    }
+
     if (action === "CHAT_MESSAGE") {
-      // console.log("messageFromServer", messageFromServer);
       const newMessage = {
-        sender: sender.player_id, // nama pengirim
-        message: message, // isi pesan
-        timestamp: timestamp, // waktu pengiriman
+        sender: sender.player_id,
+        message: message,
+        timestamp: timestamp,
       };
 
       setChatMessages((prevMessages) => [...prevMessages, newMessage]);
@@ -226,11 +254,36 @@ export default function ChessBoard({
     if (action === "GAME_CHECKMATE") {
       setWinner(message);
       setIsGameActive(false);
+
     }
 
     if (action === "GAME_DRAW") {
       setWinner(message);
       setIsGameActive(false);
+    }
+
+    if (action === "REQUEST_RESET") {
+      showAlert({
+        title: "Reset Game?",
+        text: "The other player wants to reset the game. Do you agree?",
+        icon: "warning",
+        showCancelButton: true,
+        confirmButtonText: "Yes, reset",
+        cancelButtonText: "No, continue",
+      }).then((result) => {
+        if (result.isConfirmed) {
+          sendMessage(
+            JSON.stringify({
+              action: "CONFIRM_RESET",
+              sender: { player_id: playerId },
+            })
+          );
+        }
+      });
+    }
+
+    if (action === "CONFIRM_RESET") {
+      resetGame();
     }
 
     if (action === "MARK_UPDATE") {
@@ -244,7 +297,14 @@ export default function ChessBoard({
         localStorage.setItem("playerMark", newMark);
       }
     }
-  }, [checkGameStatus, lastMessage, resetGame, playerId, isChatOpen]);
+  }, [
+    checkGameStatus,
+    lastMessage,
+    resetGame,
+    playerId,
+    isChatOpen,
+    sendMessage,
+  ]);
 
   const boardPerspective = (): "white" | "black" => {
     return playerMarkState === "black" ? "black" : "white";
@@ -267,13 +327,20 @@ export default function ChessBoard({
   };
 
   return (
-    <div className="flex items-center justify-center overflow-hidden">
+    <div className="flex overflow-hidden">
       {roomId && !isGameActive && !winner && <Waiting roomId={roomId} />}
-      {winner && winner !== "Draw" && (
-        <div className="flex h-full items-center justify-center">
+      {winner && winner !== "Draw" && !isGameActive && (
+        <div className="flex flex-col h-full items-center justify-center">
           <h2 className="text-2xl font-bold text-green-600">
             Winner: {winner}
           </h2>
+          <button
+            className="btn btn-primary ml-4"
+            onClick={handleResetRequest}
+            disabled={resetRequest}
+          >
+            Request Reset
+          </button>
         </div>
       )}
       {winner === "Draw" && (
@@ -288,29 +355,27 @@ export default function ChessBoard({
         </div>
       )}
       {isGameActive && (
-        <div className="flex flex-col md:flex-row overflow-hidden items-center justify-center space-x-0 md:space-x-5">
-          <div className="flex flex-col items-center justify-around md:h-screen w-full">
-            {/* <div className="flex flex-wrap justify-center space-x-2 text-sm md:text-xl">
-              </div> */}
-            {/* style={{ height: "100vh", width: "100%" }} */}
-            <h2>Room Id: "{roomId}"</h2>
+        <div className="flex flex-col md:flex-row">
+          <h2 className="mb-2 md:mr-2" >Room Id: "{roomId}"</h2>
 
-            <div className="w-full max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg xl:max-w-xl">
-              <Chessboard
-                position={fen}
-                onPieceDrop={onDrop}
-                boardOrientation={boardPerspective()}
-                customBoardStyle={{
-                  borderRadius: "5px",
-                  boxShadow: "0 5px 15px rgba(0, 0, 0, 0.5)",
-                }}
-                customLightSquareStyle={{ backgroundColor: "AliceBlue" }}
-                customDarkSquareStyle={{ backgroundColor: "#b3b3b3" }}
-              />
-            </div>
+          <div className="flex justify-around items-center mr-2">
+            <Chessboard
+              position={fen}
+              onPieceDrop={onDrop}
+              boardOrientation={boardPerspective()}
+              customBoardStyle={{
+                borderRadius: "5px",
+                boxShadow: "0 5px 15px rgba(0, 0, 0, 0.5)",
+              }}
+              boardWidth={
+                Math.min(window.innerWidth, window.innerHeight) * 0.90
+              }
+              customLightSquareStyle={{ backgroundColor: "AliceBlue" }}
+              customDarkSquareStyle={{ backgroundColor: "#b3b3b3" }}
+            />
           </div>
 
-          <div className="hidden md:block">
+          <div className=" hidden md:flex md:items-center ">
             <ChatOpened
               setOpenChatOpened={() => {}}
               userName={playerId}
@@ -318,9 +383,9 @@ export default function ChessBoard({
               onSendMessage={handleSendMessage}
             />
           </div>
-          <div className="block md:hidden mt-2 relative">
+          <div className="block md:hidden mx-auto mt-2 relative">
             <button
-              className="btn btn-primary btn-outline p-2"
+              className="btn btn-sm btn-primary btn-outline p-2"
               onClick={handleOpenChat}
             >
               Open Chat

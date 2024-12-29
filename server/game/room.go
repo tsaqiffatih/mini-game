@@ -20,8 +20,8 @@ type Room struct {
 }
 
 type GameRoomState struct {
-	GameType string      // Type of the game, e.g., "chess" or "tictactoe"
-	Data     interface{} // Game-specific data (e.g., FEN for chess)
+	GameType string      `json:"game_type"` // Type of the game, e.g., "chess" or "tictactoe"
+	Data     interface{} `json:"data"`      // Game-specific data (e.g., FEN for chess)
 }
 
 type JoinRoomResponse struct {
@@ -79,6 +79,7 @@ func (rm *RoomManager) CreateRoom(roomID string, gameType string) (*Room, error)
 		},
 		IsActive: false,
 	}
+	log.Println("room.GameState.Data: =>", room.GameState.Data)
 
 	rm.rooms[roomID] = room
 
@@ -92,7 +93,7 @@ func (rm *RoomManager) createGameState(gameType string) interface{} {
 		return tictactoe.NewGameState()
 	case "chess":
 		log.Println("masuk chess")
-		return ""
+		return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 	default:
 		log.Println("gameType not found")
 		return nil

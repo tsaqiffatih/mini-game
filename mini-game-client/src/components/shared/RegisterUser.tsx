@@ -1,12 +1,14 @@
 import { useState } from "react";
 import Modal from "./Modal";
-import { addPlayer } from "../../api/gameApi";
 import { ApiError } from "../../interface";
 import { showErrorAlert, showSuccessAlert } from "../../utils/alerthelper";
+import axios from "axios";
 
 interface RegisterUserProps {
   onRegister: () => void;
 }
+
+const backendUrl = "http://localhost:8080"; 
 
 export default function RegisterUser({ onRegister }: RegisterUserProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -25,14 +27,16 @@ export default function RegisterUser({ onRegister }: RegisterUserProps) {
     setIsModalOpen(false);
 
     try {
-      const response = await addPlayer(formData.userName);
+      const { data } = await axios.post(`${backendUrl}/create/user`, {
+        player_id: formData.userName,
+      });
 
-      if (!response.success) {
-        throw new Error(response.data.message);
+      if (!data.success) {
+        throw new Error(data.data.message);
       }
       await showSuccessAlert("Success Create Player");
 
-      localStorage.setItem("playerId", response.data.player_id);
+      localStorage.setItem("playerId", data.data.player_id);
       onRegister();
     } catch (err) {
       const error = err as ApiError;

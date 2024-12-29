@@ -124,10 +124,16 @@ func joinRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomMana
 	var request struct {
 		RoomID   string `json:"room_id"`
 		PlayerID string `json:"player_id"`
+		GameType string `json:"game_type"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+		response := Response{
+			Success: false,
+			Message: "Invalid request",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
 		return
 	}
 
@@ -151,6 +157,16 @@ func joinRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomMana
 			Message: "Room not found",
 		}
 		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if room.GameState.GameType != request.GameType {
+		response := Response{
+			Success: false,
+			Message: "Game type not match",
+		}
+		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(response)
 		return
 	}

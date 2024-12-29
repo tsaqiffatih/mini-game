@@ -6,8 +6,10 @@ import axios from "axios";
 interface LobbyProps {
   gameType: string;
   playerId: string;
-  onRoomIdGenerated: (roomId: string, playerMark: string) => void;
+  onRoomIdGenerated: (roomId: string, playerMark: string, initialState?:any) => void;
 }
+
+const backendUrl = "http://localhost:8080"; 
 
 export default function Lobby({
   gameType,
@@ -18,10 +20,11 @@ export default function Lobby({
   const [isLoadingJoinGame, setIsLoadingJoinGame] = useState(false);
   const [roomId, setRoomId] = useState("");
 
+
   const handleNewGame = async () => {
     setIsLoadingNewGame(true);
     try {
-      const { data } = await axios.post("http://localhost:8080/room/create", {
+      const { data } = await axios.post(`${backendUrl}/room/create`, {
         game_type: gameType,
         player_id: playerId,
       });
@@ -29,6 +32,9 @@ export default function Lobby({
       if (data.success) {
         const newRoomId = data.data.room.room_id;
         const playerMark = data.data.player_mark;
+        const initialState = data.data.room.game_state.data
+        console.log("Lobby data => ", data);
+        
         console.log("data => ", data);
         
 
@@ -36,7 +42,7 @@ export default function Lobby({
         localStorage.setItem("playerMark", playerMark);
 
         setTimeout(() => {
-          onRoomIdGenerated(newRoomId, playerMark);
+          onRoomIdGenerated(newRoomId, playerMark, initialState);
           setIsLoadingNewGame(false);
         }, 2000);
       }
@@ -67,9 +73,10 @@ export default function Lobby({
   const handleJoinRoom = async () => {
     setIsLoadingJoinGame(true);
     try {
-      const { data } = await axios.post("http://localhost:8080/room/join", {
+      const { data } = await axios.post(`${backendUrl}/room/join`, {
         room_id: roomId,
         player_id: playerId,
+        game_type: gameType,
       });
 
       if (data.success) {
@@ -90,8 +97,11 @@ export default function Lobby({
       } else if (error.response.data.message === "Room not found") {
         showErrorAlert("Room not found. Please check the room ID.");
         setIsLoadingJoinGame(false);
+      } else if (error.response.data.message === "Game type not match") {
+        showErrorAlert("Game type does not match. Please choose the correct game.");
+        setIsLoadingJoinGame(false);
       } else {
-        setIsLoadingNewGame(false);
+        setIsLoadingJoinGame(false);
         showErrorAlert(
           error.response.data.message ||
             "An error occurred while Joining the room. Please try again."

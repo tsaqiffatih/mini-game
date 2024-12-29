@@ -4,6 +4,7 @@ import "github.com/gorilla/handlers"
 
 func CORSAllowedOrigins() handlers.CORSOption {
 	return handlers.AllowedOrigins([]string{"http://localhost:5173"})
+	// return handlers.AllowedOrigins([]string{"*"})
 }
 
 func CORSAllowedHeaders() handlers.CORSOption {

@@ -121,6 +121,16 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 			}
 			NotifyToClientsInRoom(roomManager, roomID, &chessMessage)
 		}
+
+		if room.IsActive == true {
+			// Notify other players in the room about the new connection
+			message := Message{
+				Action:  "START_GAME",
+				Message: fmt.Sprintf("Player %s left the room", playerID),
+				Sender:  player,
+			}
+			NotifyToClientsInRoom(roomManager, roomID, &message)
+		}
 	}
 
 	done := make(chan struct{})
@@ -198,7 +208,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 
 	// goroutine for remove player after a delay
 	go func() {
-		time.Sleep(2 * time.Minute)
+		time.Sleep(30 * time.Second)
 		room.Mu.Lock()
 		defer room.Mu.Unlock()
 
@@ -226,6 +236,15 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 						},
 					}
 					NotifyToClientsInRoom(roomManager, room.RoomID, &message)
+					if gameState, ok := room.GameState.Data.(string); ok && gameState != "" {
+						room.GameState.Data = ""
+						gamesteMessage := Message{
+							Action:  "CHESS_GAME_STATE",
+							Message: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+							Sender:  player,
+						}
+						NotifyToClientsInRoom(roomManager, roomID, &gamesteMessage)
+					}
 				} else if room.GameState.GameType == "tictactoe" {
 					if tictactoeGameState, ok := room.GameState.Data.(*tictactoe.TictactoeGameState); ok {
 						resetPlayerMarks(room)
@@ -276,6 +295,7 @@ func handleChessMove(roomManager *game.RoomManager, roomID, playerID, fen string
 	}
 
 	room.GameState.Data = fen
+	log.Println("chessGameState:", fen)
 
 	// Notify other players in the room about the move
 	message := Message{

@@ -12,6 +12,9 @@ interface TicTacToeBoardProps {
   playerMark: string;
 }
 
+const backendUrl = "ws://localhost:8080/ws";
+// const backendUrl = "wss://vmntkmxm-8080.asse.devtunnels.ms//ws"
+
 export default function TicTacToeBoard({
   playerId,
   roomId,
@@ -35,7 +38,7 @@ export default function TicTacToeBoard({
   const navigate = useNavigate()
 
   const { sendMessage, lastMessage } = useWebSocket(
-    `ws://localhost:8080/ws?room_id=${roomId}&player_id=${playerId}`,
+    `${backendUrl}?room_id=${roomId}&player_id=${playerId}`,
     {
       onOpen: () => console.log("websocket connected"),
       onError: (event) => {

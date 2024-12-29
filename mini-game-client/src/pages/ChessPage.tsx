@@ -8,12 +8,14 @@ const ChessPage: React.FC = () => {
   const [playerId, setPlayerId] = useState<string>("");
   const [roomId, setRoomId] = useState<string>("");
   const [playerMark, setPlayerMark] = useState<string>("");
+  const [initialState, setInitialState] = useState<string>("");
 
   const navigate = useNavigate();
 
-  const handleRoomIdGenerated = (roomId: string, playerMark: string) => {
+  const handleRoomIdGenerated = (roomId: string, playerMark: string, initialState: string) => {
     setRoomId(roomId);
     setPlayerMark(playerMark);
+    setInitialState(initialState);
   };
 
   useEffect(() => {
@@ -42,6 +44,7 @@ const ChessPage: React.FC = () => {
           roomId={roomId}
           playerId={playerId}
           playerMark={playerMark}
+          initialState={initialState}
         />
       )}
     </div>
