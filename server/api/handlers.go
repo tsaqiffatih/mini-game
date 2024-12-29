@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -34,7 +33,7 @@ func RegisterRouter(r *mux.Router, roomManager *game.RoomManager, playerManager 
 	}).Methods("POST")
 
 	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		HandleWebSocket(w, r, roomManager)
+		HandleWebSocket(w, r, roomManager, playerManager)
 	})
 
 }
@@ -42,7 +41,6 @@ func RegisterRouter(r *mux.Router, roomManager *game.RoomManager, playerManager 
 func createRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomManager, playerManager *game.PlayerManager) {
 	mu.Lock()
 	defer mu.Unlock()
-	log.Println("Create Room")
 
 	var request struct {
 		GameType string `json:"game_type"`
@@ -76,7 +74,6 @@ func createRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomMa
 			Success: false,
 			Message: "Player not found",
 		}
-		log.Println(err)
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(response)
 		return
@@ -182,8 +179,6 @@ func joinRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomMana
 		return
 	}
 
-	log.Println("hanlders,Player joined room:", request.RoomID)
-
 	response := Response{
 		Success: true,
 		Message: "Player joined room successfully",
@@ -223,7 +218,6 @@ func addPlayer(w http.ResponseWriter, r *http.Request, playerManager *game.Playe
 		return
 	}
 
-	log.Println("Player added:", player.ID)
 	response := Response{
 		Success: true,
 		Message: "Success registering player",

@@ -25,7 +25,7 @@ export default function ChessBoard({
   playerId,
   roomId,
   playerMark,
-  initialState
+  initialState,
 }: ChessBoardProps) {
   const [playerMarkState, setPlayerMarkState] = useState<string>(playerMark);
   const [fen, setFen] = useState<string>(initialState || game.fen());
@@ -71,8 +71,7 @@ export default function ChessBoard({
   // function for reset the game
   const resetGame = useCallback((): void => {
     game.reset();
-    console.log("game.reset() =>", game.fen());
-    
+
     setFen(game.fen());
     setWinner("");
     setIsGameActive(true);
@@ -134,8 +133,6 @@ export default function ChessBoard({
         sender: { player_id: playerId },
       };
 
-      console.log("game.fen(): ", game.fen());
-
       sendMessage(JSON.stringify(moveMessage));
 
       checkGameStatus();
@@ -182,15 +179,10 @@ export default function ChessBoard({
     };
   }, [playerId, sendMessage, navigate]);
 
-  console.log("fen =>", fen);
-  
-
   useEffect(() => {
     if (!lastMessage) return;
 
     const { action, message, sender, timestamp } = JSON.parse(lastMessage.data);
-    console.log(JSON.parse(lastMessage.data));
-    
 
     if (action === "CHESS_MOVE") {
       if (message) {
@@ -254,7 +246,6 @@ export default function ChessBoard({
     if (action === "GAME_CHECKMATE") {
       setWinner(message);
       setIsGameActive(false);
-
     }
 
     if (action === "GAME_DRAW") {
@@ -288,8 +279,6 @@ export default function ChessBoard({
 
     if (action === "MARK_UPDATE") {
       const marks = message.marks;
-      console.log("marks", marks);
-      console.log("messageFromServer MARK_UPDATE =>", message);
 
       if (marks && marks[playerId]) {
         const newMark = marks[playerId];
@@ -356,7 +345,7 @@ export default function ChessBoard({
       )}
       {isGameActive && (
         <div className="flex flex-col md:flex-row">
-          <h2 className="mb-2 md:mr-2" >Room Id: "{roomId}"</h2>
+          <h2 className="mb-2 md:mr-2">Room Id: "{roomId}"</h2>
 
           <div className="flex justify-around items-center mr-2">
             <Chessboard
@@ -367,9 +356,7 @@ export default function ChessBoard({
                 borderRadius: "5px",
                 boxShadow: "0 5px 15px rgba(0, 0, 0, 0.5)",
               }}
-              boardWidth={
-                Math.min(window.innerWidth, window.innerHeight) * 0.90
-              }
+              boardWidth={Math.min(window.innerWidth, window.innerHeight) * 0.9}
               customLightSquareStyle={{ backgroundColor: "AliceBlue" }}
               customDarkSquareStyle={{ backgroundColor: "#b3b3b3" }}
             />

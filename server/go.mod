@@ -10,4 +10,5 @@ require (
 require (
 	github.com/felixge/httpsnoop v1.0.3 // indirect
 	github.com/gorilla/mux v1.8.1
+	golang.org/x/time v0.8.0
 )

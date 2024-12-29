@@ -23,7 +23,6 @@ export default function RegisterUser({ onRegister }: RegisterUserProps) {
 
   const handleForm = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    console.log(formData);
     setIsModalOpen(false);
 
     try {

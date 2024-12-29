@@ -3,6 +3,7 @@ package game
 import (
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -18,6 +19,7 @@ type Player struct {
 
 type PlayerManager struct {
 	players map[string]*Player
+	mu      sync.Mutex
 }
 
 // jalanin goroutine lagi untuk menghapus user yang udah gak aktif selama 1x24 jam
@@ -28,13 +30,31 @@ func NewPlayerManager() *PlayerManager {
 	}
 }
 
-// func (pm *PlayerManager) SwitchIsActive(gs *GameState) {
-// 	if len(pm.players) == 2 {
-// 		gs.IsActive = true
-// 	} else {
-// 		gs.IsActive = false
-// 	}
-// }
+func (pm *PlayerManager) RemoveInactivePlayers(duration time.Duration) {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+		now := time.Now()
+		pm.mu.Lock()
+		for playerID, player := range pm.players {
+			if now.Sub(player.LastActive) > duration {
+				delete(pm.players, playerID)
+				log.Printf("Player %s removed from system due to inactivity", playerID)
+			}
+		}
+		pm.mu.Unlock()
+	}
+}
+
+func (pm *PlayerManager) UpdatePlayerActivity(playerID string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if player, exists := pm.players[playerID]; exists {
+		player.LastActive = time.Now()
+	}
+}
 
 func (pm *PlayerManager) AddPlayer(playerID string) (*Player, error) {
 	_, exists := pm.players[playerID]

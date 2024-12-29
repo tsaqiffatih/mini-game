@@ -35,12 +35,10 @@ type ErrorMessage struct {
 	Message string `json:"message"`
 }
 
-func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.RoomManager) {
-
+func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.RoomManager, playerManager *game.PlayerManager) {
 	roomID := r.URL.Query().Get("room_id")
 	playerID := r.URL.Query().Get("player_id")
-	log.Println(roomID)
-	log.Println(playerID)
+
 	if roomID == "" || playerID == "" {
 		response := Response{
 			Success: false,
@@ -54,7 +52,6 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 	// find player in room
 	room, err := roomManager.GetRoomByID(roomID)
 	if err != nil {
-		log.Println("Error getting room HandleWebSocket:", err)
 		response := Response{
 			Success: false,
 			Message: "could not find room",
@@ -66,7 +63,6 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 
 	player, exists := room.Players[playerID]
 	if !exists {
-		log.Println("Player not found in room:", playerID)
 		response := Response{
 			Success: false,
 			Message: "player not found in room",
@@ -152,6 +148,8 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 				continue
 			}
 
+			playerManager.UpdatePlayerActivity(playerID)
+
 			switch message.Action {
 			case "TICTACTOE_MOVE":
 				var payload tictactoe.TictactoeMovePayload
@@ -184,7 +182,6 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 				}
 				handleChessMove(roomManager, roomID, playerID, payload.FEN, conn)
 			default:
-				log.Println("Invalid action:", message)
 				NotifyToClientsInRoom(roomManager, room.RoomID, &message)
 			}
 		}
@@ -196,7 +193,6 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 	// remove player's connection when websocket is closed
 	player.Conn = nil
 	close(player.Send)
-	log.Printf("Player %s disconnected from room %s", playerID, roomID)
 
 	// notify other players in the room about the disconnection
 	disconnectMessage := Message{
@@ -214,11 +210,9 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 
 		// check if player has reconnected
 		if player.Conn == nil {
-			log.Printf("Removing player %s from room %s after delay", playerID, roomID)
 
 			// remove player from room
 			delete(room.Players, playerID)
-			log.Printf("Player %s removed from room %s", playerID, roomID)
 
 			if len(room.Players) < 2 {
 				room.IsActive = false
@@ -271,7 +265,6 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.R
 
 			// remove Room if no player is connected
 			if len(room.Players) == 0 {
-				log.Println("Removing room:", roomID)
 				roomManager.RemoveRoom(roomID)
 			}
 		} else {
@@ -295,7 +288,6 @@ func handleChessMove(roomManager *game.RoomManager, roomID, playerID, fen string
 	}
 
 	room.GameState.Data = fen
-	log.Println("chessGameState:", fen)
 
 	// Notify other players in the room about the move
 	message := Message{
@@ -320,8 +312,6 @@ func NotifyTicTacToeClients(roomManager *game.RoomManager, roomID string) {
 			if room.GameState.GameType == "tictactoe" {
 				if tictactoeGameState, ok := gameState.Data.(*tictactoe.TictactoeGameState); ok {
 					sendTictactoeGameState(player, tictactoeGameState)
-				} else {
-					log.Println("Error asserting gameState to *tictactoe.TictactoeGameState")
 				}
 			}
 		}
@@ -358,7 +348,6 @@ func handleMakeMoveTictactoe(roomManager *game.RoomManager, payload tictactoe.Ti
 		return
 	}
 
-	log.Println("Move made by player:", payload.PlayerID)
 	NotifyTicTacToeClients(roomManager, payload.RoomID)
 
 	if !tictactoeGameState.IsActive {
@@ -397,7 +386,6 @@ func NotifyToClientsInRoom(roomManager *game.RoomManager, roomID string, message
 
 func sendTictactoeGameState(player *game.Player, gameState *tictactoe.TictactoeGameState) {
 	board, turn, winner, isActive := gameState.GetState()
-	log.Println("Sending game state to client:", player.ID, board, turn, winner, isActive)
 	response := tictactoe.TicTacToeGameResponse{
 		Board:    board,
 		Turn:     turn,

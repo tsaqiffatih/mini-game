@@ -35,7 +35,7 @@ export default function TicTacToeBoard({
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
 
-  const navigate = useNavigate()
+  const navigate = useNavigate();
 
   const { sendMessage, lastMessage } = useWebSocket(
     `${backendUrl}?room_id=${roomId}&player_id=${playerId}`,
@@ -125,8 +125,6 @@ export default function TicTacToeBoard({
 
       if (messageFromServer.action === "MARK_UPDATE") {
         const marks = messageFromServer.message.marks;
-        console.log("marks", marks);
-        console.log("messageFromServer MARK_UPDATE =>", messageFromServer);
 
         if (marks && marks[playerId]) {
           const newMark = marks[playerId];
@@ -136,7 +134,6 @@ export default function TicTacToeBoard({
       }
 
       if (messageFromServer.action === "CHAT_MESSAGE") {
-        // console.log("messageFromServer", messageFromServer);
         const newMessage = {
           sender: messageFromServer.sender.player_id, // nama pengirim
           message: messageFromServer.message, // isi pesan
@@ -153,8 +150,6 @@ export default function TicTacToeBoard({
       }
     }
   }, [lastMessage, setIsActive, playerId, isChatOpen]);
-
-  // console.log("chatMessages", chatMessages);
 
   const handleCellClick = (row: number, col: number) => {
     if (!isActive) {

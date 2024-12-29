@@ -6,10 +6,14 @@ import axios from "axios";
 interface LobbyProps {
   gameType: string;
   playerId: string;
-  onRoomIdGenerated: (roomId: string, playerMark: string, initialState?:any) => void;
+  onRoomIdGenerated: (
+    roomId: string,
+    playerMark: string,
+    initialState?: any
+  ) => void;
 }
 
-const backendUrl = "http://localhost:8080"; 
+const backendUrl = "http://localhost:8080";
 
 export default function Lobby({
   gameType,
@@ -19,7 +23,6 @@ export default function Lobby({
   const [isLoadingNewGame, setIsLoadingNewGame] = useState(false);
   const [isLoadingJoinGame, setIsLoadingJoinGame] = useState(false);
   const [roomId, setRoomId] = useState("");
-
 
   const handleNewGame = async () => {
     setIsLoadingNewGame(true);
@@ -32,11 +35,7 @@ export default function Lobby({
       if (data.success) {
         const newRoomId = data.data.room.room_id;
         const playerMark = data.data.player_mark;
-        const initialState = data.data.room.game_state.data
-        console.log("Lobby data => ", data);
-        
-        console.log("data => ", data);
-        
+        const initialState = data.data.room.game_state.data;
 
         localStorage.setItem("roomId", newRoomId);
         localStorage.setItem("playerMark", playerMark);
@@ -65,7 +64,6 @@ export default function Lobby({
             "An error occurred while creating the room. Please try again."
         );
       }
-      console.log("Error creating room: ", error.response);
       setIsLoadingNewGame(false);
     }
   };
@@ -98,7 +96,9 @@ export default function Lobby({
         showErrorAlert("Room not found. Please check the room ID.");
         setIsLoadingJoinGame(false);
       } else if (error.response.data.message === "Game type not match") {
-        showErrorAlert("Game type does not match. Please choose the correct game.");
+        showErrorAlert(
+          "Game type does not match. Please choose the correct game."
+        );
         setIsLoadingJoinGame(false);
       } else {
         setIsLoadingJoinGame(false);
@@ -107,7 +107,6 @@ export default function Lobby({
             "An error occurred while Joining the room. Please try again."
         );
       }
-      console.log(error.response.message);
     }
   };
 

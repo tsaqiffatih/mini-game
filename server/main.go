@@ -8,7 +8,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/tsaqiffatih/mini-game/api"
 	"github.com/tsaqiffatih/mini-game/game"
-	"github.com/tsaqiffatih/mini-game/utils"
+	"github.com/tsaqiffatih/mini-game/middleware"
 )
 
 func main() {
@@ -21,16 +21,14 @@ func main() {
 	api.RegisterRouter(r, roomManager, playerManager)
 
 	corsHandler := handlers.CORS(
-		utils.CORSAllowedHeaders(),
-		utils.CORSAllowedMethods(),
-		utils.CORSAllowedOrigins(),
+		middleware.CORSAllowedHeaders(),
+		middleware.CORSAllowedMethods(),
+		middleware.CORSAllowedOrigins(),
 	)
 
-	go roomManager.RemoveInactivePlayers()
-	// {"type": "makeMove", "payload": {"room_id": "SOVPUAD", "player_id": "fatih", "row": 1, "col": 1}}
+	go roomManager.RemoveInactivePlayersFromRoom()
 
-	//   {"action": "MAKE_MOVE", "message": "{"room_id":"8TFTXLJ","player_id":"player1","row":1,"col":1}}
-	// {"action": "MAKE_MOVE","message": {"room_id": "4B9L392","player_id": "player1","row": 1,"col": 1}}
+	r.Use(middleware.RateLimiter)
 
 	log.Println("Server running on http://localhost:8080")
 	if err := http.ListenAndServe(":8080", corsHandler(r)); err != nil {

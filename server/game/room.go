@@ -41,22 +41,28 @@ func NewRoomManager() *RoomManager {
 	}
 }
 
-func (rm *RoomManager) RemoveInactivePlayers() {
-	ticker := time.NewTicker(1 * time.Hour)
+func (rm *RoomManager) RemoveInactivePlayersFromRoom() {
+	ticker := time.NewTicker(3 * time.Hour)
 	defer ticker.Stop()
 
 	for {
 		<-ticker.C
 		now := time.Now()
 		for _, room := range rm.rooms {
+			room.Mu.Lock()
 			for playerID, player := range room.Players {
-				if now.Sub(player.LastActive) > 48*time.Hour {
+				if now.Sub(player.LastActive) > 24*time.Hour {
 					delete(room.Players, playerID)
 					log.Printf("Player %s removed from room %s due to inactivity", playerID, room.RoomID)
 				}
 			}
+			room.Mu.Unlock()
 		}
 	}
+}
+
+func updatePlayerActivity(player *Player) {
+	player.LastActive = time.Now()
 }
 
 func (rm *RoomManager) CreateRoom(roomID string, gameType string) (*Room, error) {
