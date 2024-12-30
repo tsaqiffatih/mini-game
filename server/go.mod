@@ -5,7 +5,6 @@ go 1.23.4
 require (
 	github.com/gorilla/handlers v1.5.2
 	github.com/gorilla/websocket v1.5.3
-	github.com/joho/godotenv v1.5.1
 )
 
 require (
