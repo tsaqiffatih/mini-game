@@ -37,7 +37,7 @@ export default function TicTacToeBoard({
   const navigate = useNavigate();
 
   const { sendMessage, lastMessage } = useWebSocket(
-    `${backendUrl}?room_id=${roomId}&player_id=${playerId}`,
+    `${backendUrl}/ws?room_id=${roomId}&player_id=${playerId}`,
     {
       onOpen: () => console.log("websocket connected"),
       onError: (event) => {
