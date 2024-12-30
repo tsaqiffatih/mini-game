@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -26,7 +27,11 @@ func main() {
 		middleware.CORSAllowedOrigins(),
 	)
 
-	go roomManager.RemoveInactivePlayersFromRoom()
+	tickerInterval := 30 * time.Minute
+	duration := 24 * time.Hour
+
+	go playerManager.RemoveInactivePlayers(duration, tickerInterval)
+	go roomManager.RemoveInactivePlayersFromRoom(duration, tickerInterval)
 
 	r.Use(middleware.RateLimiter)
 

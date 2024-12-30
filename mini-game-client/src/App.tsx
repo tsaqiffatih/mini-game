@@ -5,7 +5,6 @@ import TicTacToePage from "./pages/TicTacToePage";
 import SnakePage from "./pages/SnakePage";
 import NotFoundPage from "./pages/NotFoundPage";
 import ChessPage from "./pages/ChessPage";
-import Coba from "./pages/Coba";
 
 export default function App() {
   const router = createBrowserRouter([
@@ -27,10 +26,6 @@ export default function App() {
         {
           path: "/chess",
           element: <ChessPage />,
-        },
-        {
-          path: "/coba",
-          element: <Coba />,
         },
         {
           path: "*",

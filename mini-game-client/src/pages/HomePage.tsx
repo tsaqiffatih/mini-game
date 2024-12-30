@@ -38,13 +38,13 @@ const HomePage = () => {
                 >
                   Tic Tac Toe
                 </Link>
-                <Link
+                {/* <Link
                   to="/snake"
                   onClick={() => navigateToGame("/snake")}
                   className="btn btn-outline flex-1"
                 >
                   Snake
-                </Link>
+                </Link> */}
                 <Link
                   to="/chess"
                   onClick={() => navigateToGame("/chess")}
