@@ -1,10 +1,17 @@
 package middleware
 
-import "github.com/gorilla/handlers"
+import (
+	"os"
+
+	"github.com/gorilla/handlers"
+)
 
 func CORSAllowedOrigins() handlers.CORSOption {
-	return handlers.AllowedOrigins([]string{"http://localhost:5173"})
-	// return handlers.AllowedOrigins([]string{"*"})
+	allowedOrigins := os.Getenv("ALLOWED_ORIGINS")
+	if allowedOrigins == "" {
+		allowedOrigins = "http://localhost:5173"
+	}
+	return handlers.AllowedOrigins([]string{allowedOrigins})
 }
 
 func CORSAllowedHeaders() handlers.CORSOption {

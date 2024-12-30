@@ -13,7 +13,7 @@ interface LobbyProps {
   ) => void;
 }
 
-const backendUrl = "http://localhost:8080";
+const backendUrl = import.meta.env.VITE_HTTP_BACKEND_URL
 
 export default function Lobby({
   gameType,

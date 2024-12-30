@@ -12,8 +12,7 @@ interface TicTacToeBoardProps {
   playerMark: string;
 }
 
-const backendUrl = "ws://localhost:8080/ws";
-// const backendUrl = "wss://vmntkmxm-8080.asse.devtunnels.ms//ws"
+const backendUrl = import.meta.env.VITE_WS_BACKEND_URL
 
 export default function TicTacToeBoard({
   playerId,

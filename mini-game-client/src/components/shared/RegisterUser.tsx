@@ -8,7 +8,7 @@ interface RegisterUserProps {
   onRegister: () => void;
 }
 
-const backendUrl = "http://localhost:8080"; 
+const backendUrl = import.meta.env.VITE_HTTP_BACKEND_URL
 
 export default function RegisterUser({ onRegister }: RegisterUserProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);

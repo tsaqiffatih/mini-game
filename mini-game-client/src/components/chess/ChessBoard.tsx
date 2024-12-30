@@ -16,8 +16,7 @@ interface ChessBoardProps {
   initialState?: string;
 }
 
-const backendUrl = "ws://localhost:8080/ws";
-// const backendUrl = "ws://vmntkmxm-8080.asse.devtunnels.ms/ws";
+const backendUrl = import.meta.env.VITE_WS_BACKEND_URL
 
 const game = new Chess();
 
