@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Board from "../shared/Board";
 import Waiting from "../shared/Waiting";
-import { showAlert } from "../../utils/alerthelper";
+import { showAlert, showErrorAlert } from "../../utils/alerthelper";
 import useWebSocket from "react-use-websocket";
 import ChatOpened from "../shared/ChatOpened";
 import { useNavigate } from "react-router-dom";
@@ -42,25 +42,23 @@ export default function TicTacToeBoard({
       onOpen: () => console.log("websocket connected"),
       onError: (event) => {
         console.log("WebSocket error: ", event);
-        alert('WebSocket Error: ' + event);
-        // showErrorAlert(
-        //   "Room expired or no longer available. Please create or join a new room."
-        // );
+        showErrorAlert(
+          "Room expired or no longer available. Please create or join a new room."
+        );
         localStorage.removeItem("roomId");
         localStorage.removeItem("playerMark");
-        // setTimeout(() => {
-        //   window.location.reload();
-        // }, 1000);
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
       },
       onClose: () => {
-
+        localStorage.removeItem("roomId");
+        localStorage.removeItem("playerMark");
       },
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       shouldReconnect: (_closeEvent) => true,
     }
   );
-  console.log("backendUrl => :", backendUrl);
-  
 
   const lastMessageRef = useRef<string | null>(null); // untuk melacak pesan terakhir
 
