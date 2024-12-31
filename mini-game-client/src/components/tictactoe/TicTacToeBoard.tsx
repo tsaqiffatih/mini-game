@@ -53,8 +53,7 @@ export default function TicTacToeBoard({
         // }, 1000);
       },
       onClose: () => {
-        // localStorage.removeItem("roomId");
-        // localStorage.removeItem("playerMark");
+
       },
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       shouldReconnect: (_closeEvent) => true,
