@@ -27,7 +27,7 @@ export default function Lobby({
   const handleNewGame = async () => {
     setIsLoadingNewGame(true);
     try {
-      const { data } = await axios.post(`${backendUrl}/room/create`, {
+      const { data } = await axios.post(`${backendUrl}room/create`, {
         game_type: gameType,
         player_id: playerId,
       });
@@ -71,7 +71,7 @@ export default function Lobby({
   const handleJoinRoom = async () => {
     setIsLoadingJoinGame(true);
     try {
-      const { data } = await axios.post(`${backendUrl}/room/join`, {
+      const { data } = await axios.post(`${backendUrl}room/join`, {
         room_id: roomId,
         player_id: playerId,
         game_type: gameType,

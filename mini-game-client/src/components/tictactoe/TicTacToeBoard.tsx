@@ -42,14 +42,15 @@ export default function TicTacToeBoard({
       onOpen: () => console.log("websocket connected"),
       onError: (event) => {
         console.log("WebSocket error: ", event);
-        showErrorAlert(
-          "Room expired or no longer available. Please create or join a new room."
-        );
+        alert('WebSocket Error: ' + event);
+        // showErrorAlert(
+        //   "Room expired or no longer available. Please create or join a new room."
+        // );
         localStorage.removeItem("roomId");
         localStorage.removeItem("playerMark");
-        setTimeout(() => {
-          window.location.reload();
-        }, 1000);
+        // setTimeout(() => {
+        //   window.location.reload();
+        // }, 1000);
       },
       onClose: () => {
         // localStorage.removeItem("roomId");

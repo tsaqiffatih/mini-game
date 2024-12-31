@@ -26,7 +26,7 @@ export default function RegisterUser({ onRegister }: RegisterUserProps) {
     setIsModalOpen(false);
 
     try {
-      const { data } = await axios.post(`${backendUrl}/create/user`, {
+      const { data } = await axios.post(`${backendUrl}create/user`, {
         player_id: formData.userName,
       });
 
