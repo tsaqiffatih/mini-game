@@ -59,6 +59,8 @@ export default function TicTacToeBoard({
       shouldReconnect: (_closeEvent) => true,
     }
   );
+  console.log("backendUrl => :", backendUrl);
+  
 
   const lastMessageRef = useRef<string | null>(null); // untuk melacak pesan terakhir
 
