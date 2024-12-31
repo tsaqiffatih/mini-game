@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import Board from "../shared/Board";
 import Waiting from "../shared/Waiting";
-import { showAlert, showErrorAlert } from "../../utils/alerthelper";
+import { showAlert } from "../../utils/alerthelper";
 import useWebSocket from "react-use-websocket";
 import ChatOpened from "../shared/ChatOpened";
 import { useNavigate } from "react-router-dom";
