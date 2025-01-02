@@ -37,13 +37,23 @@ func cleanupClients() {
 	for {
 		time.Sleep(time.Minute)
 
+		var staleClients []string
+
 		mu.Lock()
 		for ip, client := range clients {
 			if time.Since(client.lastSeen) > 3*time.Minute {
-				delete(clients, ip)
+				staleClients = append(staleClients, ip)
 			}
 		}
 		mu.Unlock()
+
+		if len(staleClients) > 0 {
+			mu.Lock()
+			for _, ip := range staleClients {
+				delete(clients, ip)
+			}
+			mu.Unlock()
+		}
 	}
 }
 

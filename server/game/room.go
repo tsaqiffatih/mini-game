@@ -32,6 +32,7 @@ type JoinRoomResponse struct {
 
 type RoomManager struct {
 	rooms map[string]*Room
+	Mu    sync.Mutex
 }
 
 // di inisialisasi di main.go
@@ -44,21 +45,26 @@ func NewRoomManager() *RoomManager {
 func (rm *RoomManager) RemoveInactivePlayersFromRoom(duration, tickerInterval time.Duration) {
 	log.Println("Removing inactive players from room")
 	ticker := time.NewTicker(tickerInterval)
-	// ticker := time.NewTicker(3 * time.Hour)
 	defer ticker.Stop()
 
 	for {
 		<-ticker.C
 		now := time.Now()
+		rm.Mu.Lock()
 		for _, room := range rm.rooms {
-			room.Mu.Lock()
-			for playerID, player := range room.Players {
-				if now.Sub(player.LastActive) > duration {
-					delete(room.Players, playerID)
-					log.Printf("Player %s removed from room %s due to inactivity", playerID, room.RoomID)
-				}
-			}
-			room.Mu.Unlock()
+			rm.removeInactivePlayersFromRoom(room, now, duration)
+		}
+		rm.Mu.Unlock()
+	}
+}
+
+func (rm *RoomManager) removeInactivePlayersFromRoom(room *Room, now time.Time, duration time.Duration) {
+	room.Mu.Lock()
+	defer room.Mu.Unlock()
+	for playerID, player := range room.Players {
+		if now.Sub(player.LastActive) > duration {
+			delete(room.Players, playerID)
+			log.Printf("Player %s removed from room %s due to inactivity", playerID, room.RoomID)
 		}
 	}
 }
@@ -68,6 +74,9 @@ func updatePlayerActivity(player *Player) {
 }
 
 func (rm *RoomManager) CreateRoom(roomID string, gameType string) (*Room, error) {
+	rm.Mu.Lock()
+	defer rm.Mu.Unlock()
+
 	if _, exists := rm.rooms[roomID]; exists {
 		return nil, errors.New("room already exists")
 	}
@@ -97,18 +106,21 @@ func (rm *RoomManager) CreateRoom(roomID string, gameType string) (*Room, error)
 func (rm *RoomManager) createGameState(gameType string) interface{} {
 	switch gameType {
 	case "tictactoe":
-		log.Println("masuk tictactoe")
+		log.Println("Creating TicTacToe game state")
 		return tictactoe.NewGameState()
 	case "chess":
-		log.Println("masuk chess")
+		log.Println("Creating Chess game state")
 		return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 	default:
-		log.Println("gameType not found")
+		log.Println("Unknown game type:", gameType)
 		return nil
 	}
 }
 
 func (rm *RoomManager) JoinRoom(roomID string, player *Player) (*JoinRoomResponse, error) {
+	rm.Mu.Lock()
+	defer rm.Mu.Unlock()
+
 	room, exists := rm.rooms[roomID]
 	if !exists {
 		return nil, errors.New("room not found")
@@ -121,6 +133,9 @@ func (rm *RoomManager) JoinRoom(roomID string, player *Player) (*JoinRoomRespons
 	if _, exists := room.Players[player.ID]; exists {
 		return nil, errors.New("player already in room")
 	}
+
+	room.Mu.Lock()
+	defer room.Mu.Unlock()
 
 	room.Players[player.ID] = player
 	log.Println("gameState type Join Room:", reflect.TypeOf(room.GameState))
@@ -165,14 +180,20 @@ func (rm *RoomManager) JoinRoom(roomID string, player *Player) (*JoinRoomRespons
 }
 
 func (rm *RoomManager) GetRoomByID(roomID string) (*Room, error) {
+	rm.Mu.Lock()
+	defer rm.Mu.Unlock()
+
 	room, exists := rm.rooms[roomID]
-	if !exists {
-		return nil, errors.New("room not found")
+	if exists {
+		return room, nil
 	}
-	return room, nil
+	return nil, errors.New("room not found")
 }
 
 func (rm *RoomManager) RemoveRoom(roomID string) {
+	rm.Mu.Lock()
+	defer rm.Mu.Unlock()
+
 	log.Println("Removing room:", roomID)
 	delete(rm.rooms, roomID)
 }

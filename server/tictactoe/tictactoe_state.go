@@ -2,6 +2,7 @@ package tictactoe
 
 import (
 	"errors"
+	"log"
 	"sync"
 )
 
@@ -51,19 +52,24 @@ func (gs *TictactoeGameState) run() {
 	for update := range gs.updates {
 		gs.mu.Lock()
 		if !gs.IsActive {
+			log.Println("Game is not active")
 			update.Err <- errors.New("game is not active")
 		} else if gs.Board[update.Row][update.Col] != "" {
+			log.Println("Cell is already occupied")
 			update.Err <- errors.New("cell is already occupied")
 		} else if gs.Turn != update.PlayerMark {
+			log.Println("Not your turn")
 			update.Err <- errors.New("not your turn")
 		} else {
 			gs.Board[update.Row][update.Col] = update.PlayerMark
 			if gs.checkWinner(update.PlayerMark) {
 				gs.Winner = update.PlayerMark
 				gs.IsActive = false
+				log.Printf("Player %s wins", update.PlayerMark)
 			} else if gs.isBoardFull() {
 				gs.Winner = "Draw"
 				gs.IsActive = false
+				log.Println("Game is a draw")
 			} else {
 				gs.switchTurn()
 			}

@@ -16,7 +16,7 @@ interface ChessBoardProps {
   initialState?: string;
 }
 
-const backendUrl = import.meta.env.VITE_WS_BACKEND_URL
+const backendUrl = import.meta.env.VITE_WS_BACKEND_URL;
 
 const game = new Chess();
 
@@ -39,7 +39,7 @@ export default function ChessBoard({
 
   const navigate = useNavigate();
 
-  const { sendMessage, lastMessage } = useWebSocket(
+  const { sendMessage, lastMessage, readyState } = useWebSocket(
     `${backendUrl}/ws?room_id=${roomId}&player_id=${playerId}`,
     {
       onOpen: () => console.log("websocket connected"),
@@ -58,6 +58,9 @@ export default function ChessBoard({
       shouldReconnect: (_closeEvent) => true,
     }
   );
+
+  console.log("readyState =>", readyState);
+  
 
   // function for checking turn
   const isMyTurn = useCallback((): boolean => {
@@ -183,6 +186,9 @@ export default function ChessBoard({
 
     const { action, message, sender, timestamp } = JSON.parse(lastMessage.data);
 
+    console.log("action =>", action);
+    
+
     if (action === "CHESS_MOVE") {
       if (message) {
         game.load(message);
@@ -282,6 +288,7 @@ export default function ChessBoard({
       if (marks && marks[playerId]) {
         const newMark = marks[playerId];
         setPlayerMarkState(newMark);
+        setIsGameActive(message.active);
         localStorage.setItem("playerMark", newMark);
       }
     }

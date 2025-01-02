@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { showErrorAlert } from "../../utils/alerthelper";
 import axios from "axios";
+import { useNavigate } from "react-router-dom";
 
 interface LobbyProps {
   gameType: string;
@@ -23,6 +24,8 @@ export default function Lobby({
   const [isLoadingNewGame, setIsLoadingNewGame] = useState(false);
   const [isLoadingJoinGame, setIsLoadingJoinGame] = useState(false);
   const [roomId, setRoomId] = useState("");
+
+  const navigate = useNavigate()
 
   const handleNewGame = async () => {
     setIsLoadingNewGame(true);
@@ -98,7 +101,9 @@ export default function Lobby({
       } else if (error.response.data.message === "Game type not match") {
         showErrorAlert(
           "Game type does not match. Please choose the correct game."
-        );
+        ).then(() => {
+          navigate("/");
+        })
         setIsLoadingJoinGame(false);
       } else {
         setIsLoadingJoinGame(false);

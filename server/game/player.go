@@ -32,7 +32,6 @@ func NewPlayerManager() *PlayerManager {
 
 func (pm *PlayerManager) RemoveInactivePlayers(duration, tickerInterval time.Duration) {
 	ticker := time.NewTicker(tickerInterval)
-	// ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 
 	for {

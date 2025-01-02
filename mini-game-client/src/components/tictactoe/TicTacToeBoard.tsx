@@ -100,6 +100,8 @@ export default function TicTacToeBoard({
         setTurn(messageFromServer.message.turn);
         setWinner(messageFromServer.message.winner);
         setIsActive(messageFromServer.message.is_active);
+        console.log("TICTACTOE_GAME_STATE: =>", messageFromServer.message);
+        
       }
 
       if (messageFromServer.action === "USER_LEFT_ROOM") {
