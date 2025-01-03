@@ -21,12 +21,16 @@ func processTicTacToeMove(conn *websocket.Conn, roomManager *game.RoomManager, m
 
 func processChessMove(conn *websocket.Conn, roomManager *game.RoomManager, roomID string, playerId string, message Message) {
 	var payload struct {
-		FEN string `json:"fen"`
+		FEN      string `json:"fen"`
+		LastMove struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"lastMove"`
 	}
 	if !parsePayload(conn, message.Message, &payload) {
 		return
 	}
-	handleChessMove(roomManager, roomID, playerId, payload.FEN, conn)
+	handleChessMove(roomManager, roomID, playerId, payload, conn)
 }
 
 func parsePayload(conn *websocket.Conn, rawMessage interface{}, payload interface{}) bool {
@@ -62,10 +66,10 @@ func resetMarkChessRoom(roomManager *game.RoomManager, room *game.Room) {
 	NotifyToClientsInRoom(roomManager, room.RoomID, &message)
 
 	if gameState, ok := room.GameState.Data.(string); ok && gameState != "" {
-		room.GameState.Data = ""
+		room.GameState.Data = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 		message := Message{
 			Action:  "CHESS_GAME_STATE",
-			Message: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+			Message: room.GameState.Data,
 		}
 		NotifyToClientsInRoom(roomManager, room.RoomID, &message)
 	}
@@ -95,7 +99,13 @@ func resetMarkTicTacToeRoom(roomManager *game.RoomManager, room *game.Room) {
 	}
 }
 
-func handleChessMove(roomManager *game.RoomManager, roomID, playerID, fen string, conn *websocket.Conn) {
+func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, payload struct {
+	FEN      string `json:"fen"`
+	LastMove struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	} `json:"lastMove"`
+}, conn *websocket.Conn) {
 	room, err := roomManager.GetRoomByID(roomID)
 	if err != nil {
 		log.Println("Room not found:", err)
@@ -109,13 +119,16 @@ func handleChessMove(roomManager *game.RoomManager, roomID, playerID, fen string
 		return
 	}
 
-	room.GameState.Data = fen
+	room.GameState.Data = payload.FEN
 
 	// Notify other players in the room about the move
 	message := Message{
-		Action:  "CHESS_MOVE",
-		Message: fen,
-		Sender:  &game.Player{ID: playerID},
+		Action: "CHESS_MOVE",
+		Message: map[string]interface{}{
+			"fen":      payload.FEN,
+			"lastMove": payload.LastMove,
+		},
+		Sender: &game.Player{ID: playerID},
 	}
 
 	NotifyToClientsInRoom(roomManager, roomID, &message)

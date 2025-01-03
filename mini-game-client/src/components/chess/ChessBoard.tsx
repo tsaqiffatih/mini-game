@@ -8,6 +8,7 @@ import { Chessboard } from "react-chessboard";
 import { useNavigate } from "react-router-dom";
 import Waiting from "../shared/Waiting";
 import ChatOpened from "../shared/ChatOpened";
+import "./chessboard.css";
 
 interface ChessBoardProps {
   playerId: string;
@@ -36,10 +37,13 @@ export default function ChessBoard({
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
   const [resetRequest, setResetRequest] = useState<boolean>(false);
+  const [lastMove, setLastMove] = useState<{ from: string; to: string } | null>(
+    null
+  );
 
   const navigate = useNavigate();
 
-  const { sendMessage, lastMessage, readyState } = useWebSocket(
+  const { sendMessage, lastMessage } = useWebSocket(
     `${backendUrl}/ws?room_id=${roomId}&player_id=${playerId}`,
     {
       onOpen: () => console.log("websocket connected"),
@@ -58,9 +62,6 @@ export default function ChessBoard({
       shouldReconnect: (_closeEvent) => true,
     }
   );
-
-  console.log("readyState =>", readyState);
-  
 
   // function for checking turn
   const isMyTurn = useCallback((): boolean => {
@@ -109,6 +110,15 @@ export default function ChessBoard({
     }
   }, [sendMessage]);
 
+  const getSquareStyles = () => {
+    const styles: { [key: string]: React.CSSProperties } = {};
+    if (lastMove) {
+      styles[lastMove.from] = { backgroundColor: "rgba(255, 255, 0, 0.5)" };
+      styles[lastMove.to] = { backgroundColor: "rgba(255, 255, 0, 0.5)" };
+    }
+    return styles;
+  };
+
   // function for moving the pieces
   const onDrop = useCallback(
     (sourceSquare: string, targetSquare: string): boolean => {
@@ -126,11 +136,13 @@ export default function ChessBoard({
       else playMoveSound();
 
       setFen(game.fen());
+      setLastMove({ from: sourceSquare, to: targetSquare });
 
       const moveMessage = {
         action: "CHESS_MOVE",
         message: {
           fen: game.fen(),
+          lastMove: { from: sourceSquare, to: targetSquare },
         },
         sender: { player_id: playerId },
       };
@@ -186,14 +198,16 @@ export default function ChessBoard({
 
     const { action, message, sender, timestamp } = JSON.parse(lastMessage.data);
 
-    console.log("action =>", action);
-    
-
     if (action === "CHESS_MOVE") {
       if (message) {
-        game.load(message);
+        game.load(message.fen);
         setFen(game.fen());
+        setLastMove(message.lastMove);
+        console.log("lastMove =>", message.lastMove);
+        
         checkGameStatus();
+        // console.log("message =>", message);
+        
       } else {
         console.error("Invalid FEN received:", message);
       }
@@ -365,6 +379,8 @@ export default function ChessBoard({
               boardWidth={Math.min(window.innerWidth, window.innerHeight) * 0.9}
               customLightSquareStyle={{ backgroundColor: "AliceBlue" }}
               customDarkSquareStyle={{ backgroundColor: "#b3b3b3" }}
+              // customDropSquareStyle={{ boxShadow: "inset 0 0 1px 4px #ff0000" }}
+              customSquareStyles={getSquareStyles()}
             />
           </div>
 
