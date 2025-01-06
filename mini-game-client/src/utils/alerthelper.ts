@@ -1,3 +1,4 @@
+import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import Swal, { SweetAlertOptions } from "sweetalert2";
 
 
@@ -26,5 +27,24 @@ export const showErrorAlert = (message: string) => {
     title: "Uppsss...",
     text: message,
     icon: "error",
+  });
+};
+
+export const handleLeaveGameAlert = (router: AppRouterInstance) => {
+  showAlert({
+    title: "Leave Game?",
+    text: "Are you sure you want to leave the game? Your progress will be lost.",
+    icon: "warning",
+    showCancelButton: true,
+    confirmButtonText: "Yes, leave",
+    cancelButtonText: "No, stay",
+  }).then((result) => {
+    if (result.isConfirmed) {
+      localStorage.removeItem("roomId");
+      localStorage.removeItem("playerMark");
+      router.push("/");
+    } else {
+      window.history.pushState(null, "", window.location.href);
+    }
   });
 };
