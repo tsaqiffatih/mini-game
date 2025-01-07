@@ -16,18 +16,18 @@ The Mini Game Project is a collection of simple board games currently featuring 
 ## Technologies Used
 
 ### Frontend
-- **React.js**: Framework for building user interfaces.
-- **Chess.js**: Handles the logic for chess gameplay.
-- **react-chessboard**: Interactive chessboard component for React.js.
-- **react-use-websocket**: WebSocket implementation for the frontend.
-- **date-fns**: Time management, such as timestamps for chats.
-- **sweetalert2**: Interactive alerts and confirmation dialogs.
+- **[Next.js](https://nextjs.org/)**: Framework for building user interfaces.
+- **[Chess.js](https://github.com/jhlywa/chess.js)**: Handles the logic for chess gameplay.
+- **[react-chessboard](https://github.com/Clariity/react-chessboard)**: Interactive chessboard component for React.js.
+- **[react-use-websocket](https://github.com/robtaussig/react-use-websocket)**: WebSocket implementation for the frontend.
+- **[date-fns](https://date-fns.org/)**: Time management, such as timestamps for chats.
+- **[sweetalert2](https://sweetalert2.github.io/)**: Interactive alerts and confirmation dialogs.
 
 ### Backend
-- **Golang**: Main backend for game and communication management.
-- **gorilla/websocket**: WebSocket implementation for the backend.
-- **golang.org/x/time**: Library for managing time-based features like rate limiters.
-- **gorilla/handlers**: Middleware for CORS and other requirements.
+- **[Golang](https://golang.org/)**: Main backend for game and communication management.
+- **[gorilla/websocket](https://github.com/gorilla/websocket)**: WebSocket implementation for the backend.
+- **[golang.org/x/time](https://pkg.go.dev/golang.org/x/time)**: Library for managing time-based features like rate limiters.
+- **[gorilla/handlers](https://github.com/gorilla/handlers)**: Middleware for CORS and other requirements.
 
 ---
 
@@ -93,12 +93,26 @@ This project is licensed under the MIT license. See the [LICENSE](./LICENSE) fil
 ---
 
 ## Screenshots
-Screenshots will be added here when available.
-
+![HomePage](https://i.imgur.com/VVJGRiL.png)
+<br></br>
+![Tictactoe](https://i.imgur.com/sVKH6Gx.png)
 ---
 
 ## Demo
-The project will soon be deployed via Vercel. A link will be provided once deployment is complete.
+The project is deployed and can be accessed via the following link:
+
+[Mini Game Project Demo](https://mini-game-tau.vercel.app/)
+
+---
+
+## Contact the Developer
+
+If you have any questions, feedback, or suggestions, feel free to reach out through one of the following:
+
+- Open an issue on [GitHub Issues](https://github.com/tsaqiffatih/mini-game/issues).
+- Send an email to [tsaqiffatih@gmail.com](mailto:tsaqiffatih@gmail.com).
+
+Your feedback is highly appreciated, and I'm happy to collaborate or assist with any related queries!
 
 ---
 
@@ -106,8 +120,6 @@ The project will soon be deployed via Vercel. A link will be provided once deplo
 
 - The game is still in its early stages of development; additional features may be added in the future.
 - Feedback and contributions are highly appreciated.
-
-If you have any questions or suggestions, feel free to contact the developer via [GitHub Issues](https://github.com/tsaqiffatih/mini-game/issues) or the email listed in the developer's profile.
 
 ---
 
