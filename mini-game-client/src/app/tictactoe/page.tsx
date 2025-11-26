@@ -33,7 +33,7 @@ const TicTacToePage: React.FC = () => {
   }, [router]);
 
   return (
-    <div className=" overflow-hidden p-2 h-screen flex flex-col items-center justify-center">
+    <div className=" overflow-hidden sm:p-2 px-4 h-screen flex flex-col items-center justify-center">
       <button
         className="btn btn-primary text-sm btn-sm sm:btn-md sm:text-base btn-outline top-0 left-0 m-2 sm:m-4 absolute"
         onClick={() => {

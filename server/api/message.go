@@ -38,6 +38,16 @@ func handleMessageAction(conn *websocket.Conn, roomManager *game.RoomManager, ro
 		processTicTacToeMove(conn, roomManager, message)
 	case "CHESS_MOVE":
 		processChessMove(conn, roomManager, room.RoomID, player.ID, message)
+	case "CREATE_ROOM_WITH_AI":
+		room, err := roomManager.CreateRoomWithAI(message.Message.(string), "tictactoe")
+		if err != nil {
+			sendErrorMessage(conn, err.Error())
+			return
+		}
+		NotifyToClientsInRoom(roomManager, room.RoomID, &Message{
+			Action:  "ROOM_CREATED",
+			Message: room,
+		})
 	default:
 		NotifyToClientsInRoom(roomManager, room.RoomID, &message)
 	}

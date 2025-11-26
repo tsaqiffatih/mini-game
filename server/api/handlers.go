@@ -32,6 +32,10 @@ func RegisterRouter(r *mux.Router, roomManager *game.RoomManager, playerManager 
 		createRoom(w, r, roomManager, playerManager)
 	}).Methods("POST")
 
+	r.HandleFunc("/room/create/ai", func(w http.ResponseWriter, r *http.Request) {
+		createRoomWithAi(w, r, roomManager, playerManager)
+	}).Methods("POST")
+
 	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		HandleWebSocket(w, r, roomManager, playerManager)
 	})
@@ -84,6 +88,81 @@ func createRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomMa
 	fmt.Println("Room created handlers:", roomId)
 
 	room, err := roomManager.CreateRoom(roomId, request.GameType)
+	if err != nil {
+		response := Response{
+			Success: false,
+			Message: err.Error(),
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	res, err := roomManager.JoinRoom(room.RoomID, player)
+	if err != nil {
+		response := Response{
+			Success: false,
+			Message: err.Error(),
+		}
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	response := Response{
+		Success: true,
+		Message: "Room created successfully",
+		Data:    res,
+	}
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
+}
+
+func createRoomWithAi(w http.ResponseWriter, r *http.Request, roomManager *game.RoomManager, playerManager *game.PlayerManager) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var request struct {
+		GameType string `json:"game_type"`
+		PlayerID string `json:"player_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		response := Response{
+			Success: false,
+			Message: "Invalid request",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if request.GameType == "" {
+		response := Response{
+			Success: false,
+			Message: "RoomID and GameType are required",
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	player, err := playerManager.GetPlayer(request.PlayerID)
+	if err != nil {
+		response := Response{
+			Success: false,
+			Message: "Player not found",
+		}
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	roomId := roomManager.GenerateRandomRoomCode()
+
+	fmt.Println("Room created handlers:", roomId)
+
+	room, err := roomManager.CreateRoomWithAI(roomId, request.GameType)
 	if err != nil {
 		response := Response{
 			Success: false,

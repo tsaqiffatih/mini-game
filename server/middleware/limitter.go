@@ -18,6 +18,8 @@ var (
 	clients = make(map[string]*Client)
 )
 
+// getClient retrieves or creates a rate limiter for a client based on their IP.
+// It ensures rate-limiting for incoming requests.
 func getClient(ip string) *rate.Limiter {
 	mu.Lock()
 	defer mu.Unlock()
@@ -33,6 +35,8 @@ func getClient(ip string) *rate.Limiter {
 	return client.limiter
 }
 
+// cleanupClients removes stale clients that haven't been seen for a while.
+// It runs periodically to free up memory.
 func cleanupClients() {
 	for {
 		time.Sleep(time.Minute)
@@ -57,6 +61,8 @@ func cleanupClients() {
 	}
 }
 
+// RateLimiter is a middleware that limits the rate of incoming requests.
+// It uses the rate limiter to reject excessive requests.
 func RateLimiter(next http.Handler) http.Handler {
 	go cleanupClients()
 

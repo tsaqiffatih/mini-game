@@ -35,7 +35,7 @@ const ChessPage: React.FC = () => {
   }, [router]);
 
   return (
-    <div className=" overflow-hidden p-2 h-screen flex flex-col items-center justify-center">
+    <div className=" overflow-hidden sm:p-2 px-5 h-screen flex flex-col items-center justify-center">
       {!roomId ? (
         <Lobby
           playerId={playerId}

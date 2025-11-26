@@ -12,11 +12,12 @@ import (
 )
 
 type Room struct {
-	RoomID    string             `json:"room_id"`
-	Players   map[string]*Player `json:"players"`
-	GameState *GameRoomState     `json:"game_state"`
-	IsActive  bool               `json:"is_active"`
-	Mu        sync.Mutex
+	RoomID      string             `json:"room_id"`
+	Players     map[string]*Player `json:"players"`
+	GameState   *GameRoomState     `json:"game_state"`
+	IsActive    bool               `json:"is_active"`
+	IsAIEnabled bool               `json:"is_ai_enabled"`
+	Mu          sync.Mutex
 }
 
 type GameRoomState struct {
@@ -35,13 +36,16 @@ type RoomManager struct {
 	Mu    sync.Mutex
 }
 
-// di inisialisasi di main.go
+// NewRoomManager initializes a new RoomManager.
+// It manages the creation and tracking of game rooms.
 func NewRoomManager() *RoomManager {
 	return &RoomManager{
 		rooms: make(map[string]*Room),
 	}
 }
 
+// RemoveInactivePlayersFromRoom removes inactive players from all rooms.
+// It runs periodically based on the provided duration and interval.
 func (rm *RoomManager) RemoveInactivePlayersFromRoom(duration, tickerInterval time.Duration) {
 	log.Println("Removing inactive players from room")
 	ticker := time.NewTicker(tickerInterval)
@@ -69,10 +73,12 @@ func (rm *RoomManager) removeInactivePlayersFromRoom(room *Room, now time.Time, 
 	}
 }
 
-func updatePlayerActivity(player *Player) {
-	player.LastActive = time.Now()
-}
+// func updatePlayerActivity(player *Player) {
+// 	player.LastActive = time.Now()
+// }
 
+// CreateRoom creates a new game room with the specified game type.
+// It initializes the game state and adds the room to the manager.
 func (rm *RoomManager) CreateRoom(roomID string, gameType string) (*Room, error) {
 	rm.Mu.Lock()
 	defer rm.Mu.Unlock()
@@ -103,6 +109,30 @@ func (rm *RoomManager) CreateRoom(roomID string, gameType string) (*Room, error)
 	return room, nil
 }
 
+func (rm *RoomManager) CreateRoomWithAI(roomID string, gameType string) (*Room, error) {
+	room, err := rm.CreateRoom(roomID, gameType)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add AI player
+	aiPlayer := &Player{
+		ID:   "AI",
+		Mark: "O",
+	}
+	room.Players[aiPlayer.ID] = aiPlayer
+	room.IsAIEnabled = true // Mark the room as AI-enabled
+
+	if gameType == "tictactoe" {
+		if tictactoeGameState, ok := room.GameState.Data.(*tictactoe.TictactoeGameState); ok {
+			tictactoeGameState.IsActive = true
+		}
+	}
+
+	room.IsActive = true
+	return room, nil
+}
+
 func (rm *RoomManager) createGameState(gameType string) interface{} {
 	switch gameType {
 	case "tictactoe":
@@ -117,6 +147,8 @@ func (rm *RoomManager) createGameState(gameType string) interface{} {
 	}
 }
 
+// JoinRoom allows a player to join an existing room.
+// It assigns marks to players and activates the room if ready.
 func (rm *RoomManager) JoinRoom(roomID string, player *Player) (*JoinRoomResponse, error) {
 	rm.Mu.Lock()
 	defer rm.Mu.Unlock()
@@ -149,7 +181,8 @@ func (rm *RoomManager) JoinRoom(roomID string, player *Player) (*JoinRoomRespons
 				player.Mark = "O"
 			}
 
-			if len(room.Players) == 2 {
+			if len(room.Players) == 2 || room.IsAIEnabled {
+				log.Println("game state is *tictactoe.TictactoeGameState")
 				tictactoeGameState.IsActive = true
 			}
 		} else {
@@ -179,6 +212,8 @@ func (rm *RoomManager) JoinRoom(roomID string, player *Player) (*JoinRoomRespons
 	}, nil
 }
 
+// GetRoomByID retrieves a room by its ID.
+// Returns an error if the room is not found.
 func (rm *RoomManager) GetRoomByID(roomID string) (*Room, error) {
 	rm.Mu.Lock()
 	defer rm.Mu.Unlock()
@@ -190,6 +225,8 @@ func (rm *RoomManager) GetRoomByID(roomID string) (*Room, error) {
 	return nil, errors.New("room not found")
 }
 
+// RemoveRoom deletes a room by its ID.
+// It removes the room from the manager's tracking.
 func (rm *RoomManager) RemoveRoom(roomID string) {
 	rm.Mu.Lock()
 	defer rm.Mu.Unlock()
@@ -198,6 +235,8 @@ func (rm *RoomManager) RemoveRoom(roomID string) {
 	delete(rm.rooms, roomID)
 }
 
+// GenerateRandomRoomCode generates a random 7-character room code.
+// It uses a mix of letters and numbers.
 func (rm *RoomManager) GenerateRandomRoomCode() string {
 	const possibleCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	gameCode := make([]byte, 7)
