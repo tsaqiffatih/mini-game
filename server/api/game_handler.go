@@ -187,22 +187,8 @@ func sendTictactoeGameState(player *game.Player, gameState *tictactoe.TictactoeG
 
 // Chess-related functions
 func processChessMove(conn *websocket.Conn, roomManager *game.RoomManager, roomID string, playerId string, message Message) {
-	// var payload struct {
-	// 	FEN      string `json:"fen"`
-	// 	LastMove struct {
-	// 		From string `json:"from"`
-	// 		To   string `json:"to"`
-	// 	} `json:"lastMove"`
-	// }
-	var payload struct {
-		// FE masih boleh mengirim fen (ignored), tapi penting: lastMove.from & to wajib dikirim
-		FEN      string `json:"fen"`
-		LastMove struct {
-			From      string `json:"from"`
-			To        string `json:"to"`
-			Promotion string `json:"promotion,omitempty"`
-		} `json:"lastMove"`
-	}
+
+	var payload chess.ChessMovePayload
 	if !parsePayload(conn, message.Message, &payload) {
 		return
 	}
@@ -246,51 +232,8 @@ func resetMarkChessRoom(roomManager *game.RoomManager, room *game.Room) {
 	}
 }
 
-// func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, payload struct {
-// 	FEN      string `json:"fen"`
-// 	LastMove struct {
-// 		From string `json:"from"`
-// 		To   string `json:"to"`
-// 	} `json:"lastMove"`
-// }, conn *websocket.Conn) {
-// 	room, err := roomManager.GetRoomByID(roomID)
-// 	if err != nil {
-// 		log.Println("Room not found:", err)
-// 		sendErrorMessage(conn, "Room not found")
-// 		return
-// 	}
+func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, payload chess.ChessMovePayload, conn *websocket.Conn) {
 
-// 	if room.GameState.GameType != "chess" {
-// 		log.Println("Invalid game type for chess move")
-// 		sendErrorMessage(conn, "Invalid game type for chess move")
-// 		return
-// 	}
-
-// 	room.GameState.Data = payload.FEN
-
-// 	// Notify other players in the room about the move
-// 	message := Message{
-// 		Action: "CHESS_MOVE",
-// 		Message: map[string]interface{}{
-// 			"fen":      payload.FEN,
-// 			"lastMove": payload.LastMove,
-// 		},
-// 		Sender: &game.Player{ID: playerID},
-// 	}
-
-// 	log.Printf("DEBUG CHESS_MOVE: %+v\n", message)
-
-// 	NotifyToClientsInRoom(roomManager, roomID, &message)
-// }
-
-func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, payload struct {
-	FEN      string `json:"fen"`
-	LastMove struct {
-		From      string `json:"from"`
-		To        string `json:"to"`
-		Promotion string `json:"promotion,omitempty"`
-	} `json:"lastMove"`
-}, conn *websocket.Conn) {
 	room, err := roomManager.GetRoomByID(roomID)
 	if err != nil {
 		log.Println("Room not found:", err)
@@ -298,11 +241,18 @@ func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, pay
 		return
 	}
 
-	if room.GameState.GameType != "chess" {
-		log.Println("Invalid game type for chess move")
-		sendErrorMessage(conn, "Invalid game type for chess move")
+	player, exist := room.Players[playerID]
+	if !exist {
+		sendErrorMessage(conn, "Player not found in room")
+		log.Println("Player not found in room:", playerID)
 		return
 	}
+
+	// if room.GameState.GameType != "chess" {
+	// 	log.Println("Invalid game type for chess move")
+	// 	sendErrorMessage(conn, "Invalid game type for chess move")
+	// 	return
+	// }
 
 	// Expect the backend to hold a ChessGameState
 	chessGameState, ok := room.GameState.Data.(*chess.ChessGameState)
@@ -313,7 +263,7 @@ func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, pay
 	}
 
 	// apply move using backend chess engine (UCI: from+to)
-	err = chessGameState.ApplyMove(payload.LastMove.From, payload.LastMove.To, payload.LastMove.Promotion, playerID)
+	result, err := chessGameState.UpdateState(player.Mark, payload.From, payload.To, payload.Promotion)
 	if err != nil {
 		// illegal move — notify sender (and optionally broadcast error)
 		log.Println("Illegal chess move attempted:", err)
@@ -327,7 +277,8 @@ func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, pay
 		Action: actions.CHESS_MOVE,
 		Message: map[string]interface{}{
 			"fen":      newFen,
-			"lastMove": payload.LastMove,
+			"lastMove": payload,
+			"result":   result,
 		},
 		Sender: &game.Player{ID: playerID},
 	}

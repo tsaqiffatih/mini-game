@@ -10,7 +10,9 @@ import { handleLeaveGameAlert, showAlert } from "@/utils/alerthelper";
 import Waiting from "./Waiting";
 import ChatOpened from "./ChatOpened";
 import { useGameWebSocket } from "@/utils/gameWebsocket";
-import { checkGameStatus, handleChessMove } from "@/utils/chessMoveHandlers";
+import {
+  sendChessMove,
+} from "@/utils/chessMoveHandlers";
 import { PromotionPieceOption } from "react-chessboard/dist/chessboard/types";
 
 interface ChessBoardProps {
@@ -66,80 +68,37 @@ export default function ChessBoard({
 
   // onDrop: LOG first, then call handler
   const onDrop = useCallback(
-    (sourceSquare: Square, targetSquare: Square): boolean => {
-      // debug log MUST be before return
+    (from: Square, to: Square): boolean => {
+      const piece = game.get(from);
+      const isPawn = piece?.type === "p";
+      const needsPromotion =
+        isPawn &&
+        ((piece.color === "w" && to.endsWith("8")) ||
+          (piece.color === "b" && to.endsWith("1")));
 
-      console.log("DROP", { sourceSquare, targetSquare, playerMarkState });
-
-      // quick check: is this a pawn promotion?
-      const piece = game.get(sourceSquare);
-      const isPawn = piece && piece.type === "p";
-      const isWhitePromote =
-        isPawn && piece!.color === "w" && targetSquare.endsWith("8");
-      const isBlackPromote =
-        isPawn && piece!.color === "b" && targetSquare.endsWith("1");
-
-      if (isWhitePromote || isBlackPromote) {
-        // Don't perform the move here — let the promotion modal trigger onPromotionPieceSelect.
-        // Returning false avoids making a default promotion move.
+      if (needsPromotion) {
+        // biar modal promotion muncul
         return false;
       }
 
-      const ok = handleChessMove(
-        game,
-        sourceSquare,
-        targetSquare,
-        playerMarkState,
-        playerId,
-        sendMessage,
-        setFen,
-        setLastMove,
-        setWinner,
-        setIsGameActive
-      );
-
-      console.log("DROP RESULT", { ok, fen: game.fen() });
-
-      return ok;
+      return sendChessMove(sendMessage, playerId, from, to);
     },
-    [playerId, playerMarkState, sendMessage]
+    [playerId, sendMessage]
   );
 
   const onPromotionPieceSelect = useCallback(
-    (
-      piece?: PromotionPieceOption,
-      promoteFromSquare?: Square,
-      promoteToSquare?: Square
-    ): boolean => {
-      if (!piece || !promoteFromSquare || !promoteToSquare) {
-        return false;
-      }
+    (piece?: PromotionPieceOption, from?: Square, to?: Square): boolean => {
+      if (!piece || !from || !to) return false;
 
-       // convert "wQ" | "bQ" -> "q"
-    const normalizedPiece = piece.toLowerCase().replace(/^[wb]/, "") as
-      | "q"
-      | "r"
-      | "b"
-      | "n";
+      const promo = piece.toLowerCase().replace(/^[wb]/, "") as
+        | "q"
+        | "r"
+        | "b"
+        | "n";
 
-      // call handler with the user's chosen piece
-      const ok = handleChessMove(
-        game,
-        promoteFromSquare,
-        promoteToSquare,
-        playerMarkState,
-        playerId,
-        sendMessage,
-        setFen,
-        setLastMove,
-        setWinner,
-        setIsGameActive,
-        normalizedPiece // <-- pass promotion piece here
-      );
-
-      return ok;
+      return sendChessMove(sendMessage, playerId, from, to, promo);
     },
-    [playerId, playerMarkState, sendMessage]
+    [playerId, sendMessage]
   );
 
   const handleResetRequest = () => {
@@ -191,7 +150,6 @@ export default function ChessBoard({
           game.load(message.fen);
           setFen(game.fen());
           setLastMove(message.lastMove);
-          checkGameStatus(game, sendMessage, setWinner, setIsGameActive);
         } catch (err) {
           console.error("Failed to apply CHESS_MOVE from WS", err, message);
         }

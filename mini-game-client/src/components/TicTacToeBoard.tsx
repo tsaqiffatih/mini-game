@@ -61,6 +61,8 @@ export default function TicTacToeBoard({
     if (lastMessage !== null && lastMessage.data !== lastMessageRef.current) {
       lastMessageRef.current = lastMessage.data;
       const messageFromServer = JSON.parse(lastMessage.data);
+      console.log(messageFromServer);
+      
 
       if (messageFromServer.action === "TICTACTOE_GAME_STATE") {
         setBoard(messageFromServer.message.board);
