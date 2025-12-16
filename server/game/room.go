@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tsaqiffatih/mini-game/chess"
 	"github.com/tsaqiffatih/mini-game/tictactoe"
 )
 
@@ -137,10 +138,11 @@ func (rm *RoomManager) createGameState(gameType string) interface{} {
 	switch gameType {
 	case "tictactoe":
 		log.Println("Creating TicTacToe game state")
-		return tictactoe.NewGameState()
+		return tictactoe.NewTicTacToeGameState()
 	case "chess":
 		log.Println("Creating Chess game state")
-		return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+		// return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+		return chess.NewChessGameState()
 	default:
 		log.Println("Unknown game type:", gameType)
 		return nil

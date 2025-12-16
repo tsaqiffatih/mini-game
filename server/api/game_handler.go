@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tsaqiffatih/mini-game/actions"
+	"github.com/tsaqiffatih/mini-game/chess"
 	"github.com/tsaqiffatih/mini-game/game"
 	"github.com/tsaqiffatih/mini-game/tictactoe"
 )
@@ -38,10 +40,12 @@ func resetPlayerMarks(room *game.Room) {
 		}
 	} else if room.GameState.GameType == "chess" {
 		// chess: reset ke "white" jika tinggal satu pemain
-		for _, player := range room.Players {
-			player.Mark = "white"
-			log.Printf("Player %s mark reset to white for Chess", player.ID)
-			break
+		if _, ok := room.GameState.Data.(*chess.ChessGameState); ok {
+			for _, player := range room.Players {
+				player.Mark = "white"
+				log.Printf("Player %s mark reset to white for Chess", player.ID)
+				break
+			}
 		}
 
 	} else {
@@ -67,7 +71,7 @@ func resetMarkTicTacToeRoom(roomManager *game.RoomManager, room *game.Room) {
 			playerMarks[player.ID] = player.Mark
 		}
 		message := Message{
-			Action: "MARK_UPDATE",
+			Action: actions.MARK_UPDATE,
 			Message: map[string]interface{}{
 				"marks": playerMarks,
 			},
@@ -157,7 +161,7 @@ func sendTictactoeGameState(player *game.Player, gameState *tictactoe.TictactoeG
 	}
 
 	message := Message{
-		Action:  "TICTACTOE_GAME_STATE",
+		Action:  actions.TICTACTOE_GAME_STATE,
 		Message: response,
 		Sender: &game.Player{
 			ID:         player.ID,
@@ -183,11 +187,20 @@ func sendTictactoeGameState(player *game.Player, gameState *tictactoe.TictactoeG
 
 // Chess-related functions
 func processChessMove(conn *websocket.Conn, roomManager *game.RoomManager, roomID string, playerId string, message Message) {
+	// var payload struct {
+	// 	FEN      string `json:"fen"`
+	// 	LastMove struct {
+	// 		From string `json:"from"`
+	// 		To   string `json:"to"`
+	// 	} `json:"lastMove"`
+	// }
 	var payload struct {
+		// FE masih boleh mengirim fen (ignored), tapi penting: lastMove.from & to wajib dikirim
 		FEN      string `json:"fen"`
 		LastMove struct {
-			From string `json:"from"`
-			To   string `json:"to"`
+			From      string `json:"from"`
+			To        string `json:"to"`
+			Promotion string `json:"promotion,omitempty"`
 		} `json:"lastMove"`
 	}
 	if !parsePayload(conn, message.Message, &payload) {
@@ -204,7 +217,7 @@ func resetMarkChessRoom(roomManager *game.RoomManager, room *game.Room) {
 		playerMarks[player.ID] = player.Mark
 	}
 	message := Message{
-		Action: "MARK_UPDATE",
+		Action: actions.MARK_UPDATE,
 		Message: map[string]interface{}{
 			"marks":  playerMarks,
 			"active": room.IsActive,
@@ -213,21 +226,69 @@ func resetMarkChessRoom(roomManager *game.RoomManager, room *game.Room) {
 	log.Println("room isActive =>", room.IsActive)
 	NotifyToClientsInRoom(roomManager, room.RoomID, &message)
 
-	if gameState, ok := room.GameState.Data.(string); ok && gameState != "" {
-		room.GameState.Data = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+	// if gameState, ok := room.GameState.Data.(string); ok && gameState != "" {
+	// 	room.GameState.Data = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+	// 	message := Message{
+	// 		Action:  "CHESS_GAME_STATE",
+	// 		Message: room.GameState.Data,
+	// 	}
+	// 	NotifyToClientsInRoom(roomManager, room.RoomID, &message)
+	// }
+	// If game state exists and is chess, reset to starting position
+	if chessGameState, ok := room.GameState.Data.(*chess.ChessGameState); ok && chessGameState != nil {
+		// replace with new fresh game
+		room.GameState.Data = chess.NewChessGameState()
 		message := Message{
-			Action:  "CHESS_GAME_STATE",
-			Message: room.GameState.Data,
+			Action:  actions.CHESS_GAME_STATE,
+			Message: room.GameState.Data.(*chess.ChessGameState).FEN(),
 		}
 		NotifyToClientsInRoom(roomManager, room.RoomID, &message)
 	}
 }
 
+// func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, payload struct {
+// 	FEN      string `json:"fen"`
+// 	LastMove struct {
+// 		From string `json:"from"`
+// 		To   string `json:"to"`
+// 	} `json:"lastMove"`
+// }, conn *websocket.Conn) {
+// 	room, err := roomManager.GetRoomByID(roomID)
+// 	if err != nil {
+// 		log.Println("Room not found:", err)
+// 		sendErrorMessage(conn, "Room not found")
+// 		return
+// 	}
+
+// 	if room.GameState.GameType != "chess" {
+// 		log.Println("Invalid game type for chess move")
+// 		sendErrorMessage(conn, "Invalid game type for chess move")
+// 		return
+// 	}
+
+// 	room.GameState.Data = payload.FEN
+
+// 	// Notify other players in the room about the move
+// 	message := Message{
+// 		Action: "CHESS_MOVE",
+// 		Message: map[string]interface{}{
+// 			"fen":      payload.FEN,
+// 			"lastMove": payload.LastMove,
+// 		},
+// 		Sender: &game.Player{ID: playerID},
+// 	}
+
+// 	log.Printf("DEBUG CHESS_MOVE: %+v\n", message)
+
+// 	NotifyToClientsInRoom(roomManager, roomID, &message)
+// }
+
 func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, payload struct {
 	FEN      string `json:"fen"`
 	LastMove struct {
-		From string `json:"from"`
-		To   string `json:"to"`
+		From      string `json:"from"`
+		To        string `json:"to"`
+		Promotion string `json:"promotion,omitempty"`
 	} `json:"lastMove"`
 }, conn *websocket.Conn) {
 	room, err := roomManager.GetRoomByID(roomID)
@@ -243,19 +304,35 @@ func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, pay
 		return
 	}
 
-	room.GameState.Data = payload.FEN
+	// Expect the backend to hold a ChessGameState
+	chessGameState, ok := room.GameState.Data.(*chess.ChessGameState)
+	if !ok || chessGameState == nil {
+		log.Println("Invalid chess game state stored in room")
+		sendErrorMessage(conn, "Invalid chess game state")
+		return
+	}
 
-	// Notify other players in the room about the move
+	// apply move using backend chess engine (UCI: from+to)
+	err = chessGameState.ApplyMove(payload.LastMove.From, payload.LastMove.To, payload.LastMove.Promotion, playerID)
+	if err != nil {
+		// illegal move — notify sender (and optionally broadcast error)
+		log.Println("Illegal chess move attempted:", err)
+		sendErrorMessage(conn, "Illegal chess move: "+err.Error())
+		return
+	}
+
+	// broadcast the authoritative FEN from backend
+	newFen := chessGameState.FEN()
 	message := Message{
-		Action: "CHESS_MOVE",
+		Action: actions.CHESS_MOVE,
 		Message: map[string]interface{}{
-			"fen":      payload.FEN,
+			"fen":      newFen,
 			"lastMove": payload.LastMove,
 		},
 		Sender: &game.Player{ID: playerID},
 	}
 
-	log.Printf("DEBUG CHESS_MOVE: %+v\n", message)
+	log.Printf("DEBUG CHESS_MOVE (server-validated): %+v\n", message)
 
 	NotifyToClientsInRoom(roomManager, roomID, &message)
 }

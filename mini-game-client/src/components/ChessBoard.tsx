@@ -1,15 +1,17 @@
+// components/ChessBoardClient.tsx
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Chess } from "chess.js";
+import { Chess, Square } from "chess.js";
 import { Chessboard } from "react-chessboard";
-import "@/styles/chessboard.css";
+// import "@/styles/chessboard.css";
 import { useRouter } from "next/navigation";
 import { handleLeaveGameAlert, showAlert } from "@/utils/alerthelper";
 import Waiting from "./Waiting";
 import ChatOpened from "./ChatOpened";
 import { useGameWebSocket } from "@/utils/gameWebsocket";
 import { checkGameStatus, handleChessMove } from "@/utils/chessMoveHandlers";
+import { PromotionPieceOption } from "react-chessboard/dist/chessboard/types";
 
 interface ChessBoardProps {
   playerId: string;
@@ -41,14 +43,13 @@ export default function ChessBoard({
   );
 
   const router = useRouter();
-  const lastMessageRef = useRef(null)
+  const lastMessageRef = useRef<string | null>(null);
 
   const { sendMessage, lastMessage } = useGameWebSocket(roomId, playerId);
 
-  // function for reset the game
+  // reset function
   const resetGame = useCallback((): void => {
     game.reset();
-
     setFen(game.fen());
     setWinner("");
     setIsGameActive(true);
@@ -63,10 +64,28 @@ export default function ChessBoard({
     return styles;
   };
 
-  // function for moving the pieces
+  // onDrop: LOG first, then call handler
   const onDrop = useCallback(
-    (sourceSquare: string, targetSquare: string): boolean => {
-      return handleChessMove(
+    (sourceSquare: Square, targetSquare: Square): boolean => {
+      // debug log MUST be before return
+
+      console.log("DROP", { sourceSquare, targetSquare, playerMarkState });
+
+      // quick check: is this a pawn promotion?
+      const piece = game.get(sourceSquare);
+      const isPawn = piece && piece.type === "p";
+      const isWhitePromote =
+        isPawn && piece!.color === "w" && targetSquare.endsWith("8");
+      const isBlackPromote =
+        isPawn && piece!.color === "b" && targetSquare.endsWith("1");
+
+      if (isWhitePromote || isBlackPromote) {
+        // Don't perform the move here — let the promotion modal trigger onPromotionPieceSelect.
+        // Returning false avoids making a default promotion move.
+        return false;
+      }
+
+      const ok = handleChessMove(
         game,
         sourceSquare,
         targetSquare,
@@ -78,6 +97,47 @@ export default function ChessBoard({
         setWinner,
         setIsGameActive
       );
+
+      console.log("DROP RESULT", { ok, fen: game.fen() });
+
+      return ok;
+    },
+    [playerId, playerMarkState, sendMessage]
+  );
+
+  const onPromotionPieceSelect = useCallback(
+    (
+      piece?: PromotionPieceOption,
+      promoteFromSquare?: Square,
+      promoteToSquare?: Square
+    ): boolean => {
+      if (!piece || !promoteFromSquare || !promoteToSquare) {
+        return false;
+      }
+
+       // convert "wQ" | "bQ" -> "q"
+    const normalizedPiece = piece.toLowerCase().replace(/^[wb]/, "") as
+      | "q"
+      | "r"
+      | "b"
+      | "n";
+
+      // call handler with the user's chosen piece
+      const ok = handleChessMove(
+        game,
+        promoteFromSquare,
+        promoteToSquare,
+        playerMarkState,
+        playerId,
+        sendMessage,
+        setFen,
+        setLastMove,
+        setWinner,
+        setIsGameActive,
+        normalizedPiece // <-- pass promotion piece here
+      );
+
+      return ok;
     },
     [playerId, playerMarkState, sendMessage]
   );
@@ -105,30 +165,51 @@ export default function ChessBoard({
     };
   }, [router]);
 
-  // useEffect for handle the last message
+  // useEffect untuk lastMessage
   useEffect(() => {
     if (!lastMessage || lastMessage.data === lastMessageRef.current) return;
 
     lastMessageRef.current = lastMessage.data;
 
-    const { action, message, sender, timestamp } = JSON.parse(lastMessage.data);
+    // parse message
+    let parsed: any;
+    try {
+      parsed = JSON.parse(lastMessage.data);
+    } catch (err) {
+      console.log(err);
+
+      console.error("Invalid ws message JSON", lastMessage.data);
+      return;
+    }
+
+    const { action, message, sender, timestamp } = parsed;
 
     if (action === "CHESS_MOVE") {
       if (message) {
-        game.load(message.fen);
-        setFen(game.fen());
-        setLastMove(message.lastMove);
-        checkGameStatus(game, sendMessage, setWinner, setIsGameActive);
+        console.log("WS CHESS_MOVE received", message);
+        try {
+          game.load(message.fen);
+          setFen(game.fen());
+          setLastMove(message.lastMove);
+          checkGameStatus(game, sendMessage, setWinner, setIsGameActive);
+        } catch (err) {
+          console.error("Failed to apply CHESS_MOVE from WS", err, message);
+        }
       }
     }
 
     if (action === "CHESS_GAME_STATE") {
       if (message) {
-        game.load(message);
-        setFen(game.fen());
+        try {
+          game.load(message);
+          setFen(game.fen());
+        } catch (err) {
+          console.error("Failed to load CHESS_GAME_STATE", err);
+        }
       }
     }
 
+    /* 🟢 1. USER_LEFT_ROOM */
     if (action === "USER_LEFT_ROOM") {
       showAlert({
         title: "Player Left",
@@ -138,6 +219,7 @@ export default function ChessBoard({
       });
     }
 
+    /* 🟢 2. CONNECTED_ON_SERVER */
     if (action === "CONNECTED_ON_SERVER") {
       if (sender.player_id !== playerId) {
         showAlert({
@@ -149,6 +231,7 @@ export default function ChessBoard({
       }
     }
 
+    /* 🟢 3. START_GAME */
     if (action === "START_GAME") {
       setIsGameActive(true);
     }
@@ -213,13 +296,7 @@ export default function ChessBoard({
         localStorage.setItem("playerMark", newMark);
       }
     }
-  }, [
-    lastMessage,
-    resetGame,
-    playerId,
-    isChatOpen,
-    sendMessage,
-  ]);
+  }, [lastMessage, resetGame, playerId, isChatOpen, sendMessage]);
 
   const boardPerspective = (): "white" | "black" => {
     return playerMarkState === "black" ? "black" : "white";
@@ -287,6 +364,8 @@ export default function ChessBoard({
               customDarkSquareStyle={{ backgroundColor: "#b3b3b3" }}
               customDropSquareStyle={{ boxShadow: "inset 0 0 1px 4px #ff0000" }}
               customSquareStyles={getSquareStyles()}
+              promotionDialogVariant="modal"
+              onPromotionPieceSelect={onPromotionPieceSelect}
             />
           </div>
 

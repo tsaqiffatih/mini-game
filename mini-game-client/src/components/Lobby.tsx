@@ -92,6 +92,8 @@ export default function Lobby({
         }, 2000);
       }
     } catch (error: any) {
+      console.log(error);
+      
       if (error.response.data.message === "Player not found") {
         showErrorAlert("Player not found. Please register first.");
         localStorage.removeItem("playerId");

@@ -39,7 +39,7 @@ type TictactoeMovePayload struct {
 
 // NewGameState initializes a new Tic Tac Toe game state.
 // It sets up the board, turn, and other initial values.
-func NewGameState() *TictactoeGameState {
+func NewTicTacToeGameState() *TictactoeGameState {
 	gs := &TictactoeGameState{
 		Board:    [3][3]string{},
 		Turn:     "X",

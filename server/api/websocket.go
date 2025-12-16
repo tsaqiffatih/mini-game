@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tsaqiffatih/mini-game/actions"
 	"github.com/tsaqiffatih/mini-game/game"
 )
 
@@ -112,7 +113,7 @@ func handlePingPong(conn *websocket.Conn, done chan struct{}) {
 func handlePlayerDisconnection(roomManager *game.RoomManager, room *game.Room, playerID string, player *game.Player) {
 	player.Conn = nil
 	message := Message{
-		Action:  "USER_LEFT_ROOM",
+		Action:  actions.USER_LEFT_ROOM,
 		Message: fmt.Sprintf("Player %s left the room", playerID),
 		Sender:  player,
 	}

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tsaqiffatih/mini-game/actions"
+	"github.com/tsaqiffatih/mini-game/chess"
 	"github.com/tsaqiffatih/mini-game/game"
 )
 
@@ -34,18 +36,18 @@ func readMessages(conn *websocket.Conn, done chan struct{}, roomManager *game.Ro
 
 func handleMessageAction(conn *websocket.Conn, roomManager *game.RoomManager, room *game.Room, player *game.Player, message Message) {
 	switch message.Action {
-	case "TICTACTOE_MOVE":
+	case actions.TICTACTOE_MOVE:
 		processTicTacToeMove(conn, roomManager, message)
-	case "CHESS_MOVE":
+	case actions.CHESS_MOVE:
 		processChessMove(conn, roomManager, room.RoomID, player.ID, message)
-	case "CREATE_ROOM_WITH_AI":
+	case actions.CREATE_ROOM_WITH_AI:
 		room, err := roomManager.CreateRoomWithAI(message.Message.(string), "tictactoe")
 		if err != nil {
 			sendErrorMessage(conn, err.Error())
 			return
 		}
 		NotifyToClientsInRoom(roomManager, room.RoomID, &Message{
-			Action:  "ROOM_CREATED",
+			Action:  actions.ROOM_CREATED,
 			Message: room,
 		})
 	default:
@@ -55,7 +57,7 @@ func handleMessageAction(conn *websocket.Conn, roomManager *game.RoomManager, ro
 
 func notifyRoomOnConnection(roomManager *game.RoomManager, room *game.Room, player *game.Player) {
 	message := Message{
-		Action:  "CONNECTED_ON_SERVER",
+		Action:  actions.CONNECTED_ON_SERVER,
 		Message: fmt.Sprintf("Player %s connected to room %s", player.ID, room.RoomID),
 		Sender:  player,
 	}
@@ -70,10 +72,10 @@ func notifyRoomOnConnection(roomManager *game.RoomManager, room *game.Room, play
 }
 
 func notifyChessClients(roomManager *game.RoomManager, room *game.Room, player *game.Player) {
-	if gameState, ok := room.GameState.Data.(string); ok && gameState != "" {
+	if chessState, ok := room.GameState.Data.(*chess.ChessGameState); ok && chessState != nil {
 		message := Message{
-			Action:  "CHESS_GAME_STATE",
-			Message: gameState,
+			Action:  actions.CHESS_GAME_STATE,
+			Message: chessState.FEN(),
 			Sender:  player,
 		}
 		NotifyToClientsInRoom(roomManager, room.RoomID, &message)
@@ -81,7 +83,7 @@ func notifyChessClients(roomManager *game.RoomManager, room *game.Room, player *
 
 	if room.IsActive {
 		message := Message{
-			Action:  "START_GAME",
+			Action:  actions.START_GAME,
 			Message: fmt.Sprintf("Player %s left the room", player.ID),
 			Sender:  player,
 		}
