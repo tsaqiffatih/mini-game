@@ -1,0 +1,23 @@
+package actions
+
+const (
+	// chess
+	CHESS_GAME_STATE = "CHESS_GAME_STATE"
+	CHESS_MOVE       = "CHESS_MOVE"
+	START_GAME       = "START_GAME"
+
+	// room
+	CONNECTED_ON_SERVER = "CONNECTED_ON_SERVER"
+	CREATE_ROOM_WITH_AI = "CREATE_ROOM_WITH_AI"
+	ROOM_CREATED        = "ROOM_CREATED"
+
+	// common game (updating mark)
+	MARK_UPDATE = "MARK_UPDATE"
+
+	// tictactoe
+	TICTACTOE_GAME_STATE = "TICTACTOE_GAME_STATE"
+	TICTACTOE_MOVE       = "TICTACTOE_MOVE"
+
+	// user
+	USER_LEFT_ROOM = "USER_LEFT_ROOM"
+)

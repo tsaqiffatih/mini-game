@@ -30,9 +30,19 @@ export default function TicTacToeBoard({
   ]);
   const [turn, setTurn] = useState<string>("");
   const [winner, setWinner] = useState<string>("");
-  const [isActive, setIsActive] = useState<boolean>(false);
+
+  const [roomState, setRoomState] = useState<
+    "WAITING" | "PLAYING" | "FINISHED" | "RESETTING"
+  >("WAITING");
+
   const [chatMessages, setChatMessages] = useState<
-    Array<{ sender: string; message: string; timestamp: string }>
+    Array<{
+      id: string;
+      sender: string;
+      playerMark?: string;
+      message: string;
+      timestamp: string;
+    }>
   >([]);
   const [playerMarkState, setPlayerMarkState] = useState<string>(playerMark);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
@@ -43,6 +53,12 @@ export default function TicTacToeBoard({
   const { sendMessage, lastMessage } = useGameWebSocket(roomId, playerId);
 
   const lastMessageRef = useRef<string | null>(null); // untuk melacak pesan terakhir
+  const isChatOpenRef = useRef(false);
+
+  // useEffect for message
+  useEffect(() => {
+    isChatOpenRef.current = isChatOpen;
+  }, [isChatOpen]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -60,94 +76,159 @@ export default function TicTacToeBoard({
   useEffect(() => {
     if (lastMessage !== null && lastMessage.data !== lastMessageRef.current) {
       lastMessageRef.current = lastMessage.data;
-      const messageFromServer = JSON.parse(lastMessage.data);
-      console.log(messageFromServer);
-      
+      const msg = JSON.parse(lastMessage.data);
 
-      if (messageFromServer.action === "TICTACTOE_GAME_STATE") {
-        setBoard(messageFromServer.message.board);
+      switch (msg.type) {
+        case "room_update":
+        case "game_update": {
+          const state = msg.payload?.room ?? msg.payload;
 
-        setTurn(messageFromServer.message.turn);
-        setWinner(messageFromServer.message.winner);
-        setIsActive(messageFromServer.message.is_active);
-      }
+          console.log(state);
+          
 
-      if (messageFromServer.action === "USER_LEFT_ROOM") {
-        showAlert({
-          title: "Player Left",
-          text: "The other player has left the room.",
-          icon: "info",
-          confirmButtonText: "Ok",
-        });
-      }
+          if (!state) break;
 
-      if (messageFromServer.action === "CONNECTED_ON_SERVER") {
-        if (messageFromServer.sender.player_id !== playerId) {
-          showAlert({
-            title: "Player Joined",
-            text: "The other player has joined the room.",
-            icon: "info",
-            confirmButtonText: "Ok",
+          setRoomState(state.state);
+
+          const game = state.tictactoe;
+
+          if (game) {
+            setBoard(state.tictactoe.board);
+            setTurn(state.tictactoe.turn);
+            setWinner(state.tictactoe.winner);
+          }
+
+          break;
+        }
+
+        case "player_joined":
+          const joinedPlayerId = msg.payload?.data?.player?.player_id;
+
+          if (playerId !== joinedPlayerId) {
+            console.log(msg);
+            const state = msg.payload?.room ?? msg.payload;
+            setRoomState(state.state);
+
+            showAlert({
+              title: "Player Joined",
+              text: "The other player has joined the room.",
+              icon: "info",
+              confirmButtonText: "Ok",
+            });
+          }
+
+          break;
+
+        case "player_left":
+          const leftedPlayerId = msg.payload?.data?.player?.player_id;
+
+          if (leftedPlayerId != playerId) {
+            showAlert({
+              title: "Player Lefted",
+              text: "The other player has left the room.",
+              icon: "info",
+              confirmButtonText: "Ok",
+            });
+          }
+
+          break;
+
+        case "chat_history":
+          const messages = msg.payload?.messages ?? [];
+
+          setChatMessages((prev) => {
+            const map = new Map();
+
+            [...prev, ...messages].forEach((m: any) => {
+              map.set(m.id, {
+                id: m.id,
+                sender: m.player_id,
+                playerMark: m.player_mark,
+                message: m.message,
+                timestamp: m.created_at,
+              });
+            });
+
+            return Array.from(map.values()).sort(
+              (a, b) =>
+                new Date(a.timestamp).getTime() -
+                new Date(b.timestamp).getTime(),
+            );
           });
+
+          break;
+
+        case "chat_message": {
+          const chat = msg.payload;
+
+          if (!chat) break;
+
+          setChatMessages((prev) => {
+            const exists = prev.some((m) => m.id === chat.id);
+
+            if (exists) return prev;
+
+            return [
+              ...prev,
+              {
+                id: chat.id,
+                sender: chat.player_id,
+                playerMark: chat.player_mark,
+                message: chat.message,
+                timestamp: chat.created_at,
+              },
+            ];
+          });
+
+          if (!isChatOpenRef.current) {
+            setHasNewMessage(true);
+          }
+
+          break;
         }
-      }
 
-      if (messageFromServer.action === "MARK_UPDATE") {
-        const marks = messageFromServer.message.marks;
+        case "error":
+          showErrorAlert(msg.payload?.message || "Something went wrong");
+          break;
 
-        if (marks && marks[playerId]) {
-          const newMark = marks[playerId];
-          setPlayerMarkState(newMark);
-          localStorage.setItem("playerMark", newMark);
-        }
-      }
-
-      if (messageFromServer.action === "CHAT_MESSAGE") {
-        const newMessage = {
-          sender: messageFromServer.sender.player_id,
-          message: messageFromServer.message,
-          timestamp: messageFromServer.timestamp,
-        };
-
-        setChatMessages((prevMessages) => [...prevMessages, newMessage]);
-
-        if (!isChatOpen) {
-          setHasNewMessage(true);
-          const audio = new Audio("/sounds/notification.mp3");
-          audio.play();
-        }
+        default:
+          break;
       }
     }
-  }, [lastMessage, setIsActive, playerId, isChatOpen]);
+  }, [lastMessage, playerId, isChatOpen]);
 
   const handleCellClick = (row: number, col: number) => {
-    if (!isActive) {
-      alert("The game is not active yet!");
+    if (roomState != "PLAYING") {
+      showErrorAlert("The game is not active yet!");
       return;
     }
 
-    if (turn !== playerMarkState) {
-      showErrorAlert("It's not your turn!");
-      return;
-    }
+    if (turn !== playerMarkState) return;
 
-    const message = {
-      action: "TICTACTOE_MOVE",
-      message: { room_id: roomId, player_id: playerId, row, col },
-      sender: { id: playerId },
-    };
-    sendMessage(JSON.stringify(message));
+    if (board[row][col] !== "") return
+
+    sendMessage(
+      JSON.stringify({
+        type: "TICTACTOE_MOVE",
+        payload: {
+          room_id: roomId,
+          player_id: playerId,
+          row,
+          col,
+        },
+      }),
+    );
   };
 
   const handleSendMessage = (message: string) => {
-    const chatMessage = {
-      action: "CHAT_MESSAGE",
-      message: message,
-      sender: { player_id: playerId },
-      time: new Date().toISOString(),
-    };
-
-    sendMessage(JSON.stringify(chatMessage));
+    sendMessage(
+      JSON.stringify({
+        type: "CHAT_SEND",
+        payload: {
+          message,
+        },
+      }),
+    );
   };
 
   const handleOpenChat = () => {
@@ -157,14 +238,35 @@ export default function TicTacToeBoard({
 
   return (
     <div className="p-2 flex  items-center justify-center overflow-hidden">
-      {roomId && !isActive && !winner && <Waiting roomId={roomId} />}
-      {winner && winner !== "Draw" && (
+      {/* WAITING */}
+      {roomState === "WAITING" && <Waiting roomId={roomId} />}
+
+      {/* FINISHED */}
+      {roomState === "FINISHED" && (
+        <div className="flex flex-col items-center justify-center">
+          {winner === "Draw" ? (
+            <h2 className="text-xl text-yellow-500">Game Draw!</h2>
+          ) : (
+            <h2 className="text-xl text-green-500">Winner: {winner}</h2>
+          )}
+        </div>
+      )}
+
+      {/* RESETTING */}
+      {roomState === "RESETTING" && (
+        <div className="text-center">
+          <h2 className="text-lg">Resetting game...</h2>
+        </div>
+      )}
+
+      {/* {winner && winner !== "Draw" && (
         <div className="flex h-full items-center justify-center">
           <h2 className="text-2xl font-bold text-green-600">
             Winner: {winner}
           </h2>
         </div>
       )}
+
       {winner === "Draw" && (
         <div className="flex flex-col items-center justify-center space-y-4">
           <h2 className="text-2xl font-bold text-yellow-600 text-center">
@@ -175,8 +277,9 @@ export default function TicTacToeBoard({
           </p>
           <p className="text-lg text-center">Wait Until the game Restart</p>
         </div>
-      )}
-      {isActive && (
+      )} */}
+
+      {roomState === "PLAYING" && (
         <div className="flex flex-col md:flex-row overflow-hidden p-2 items-center justify-center space-x-0 md:space-x-10">
           <div className="flex p-5">
             <div className="flex flex-col items-center justify-center space-y-4">

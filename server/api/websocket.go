@@ -1,15 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/tsaqiffatih/mini-game/actions"
+	"github.com/tsaqiffatih/mini-game/api/dto"
 	"github.com/tsaqiffatih/mini-game/game"
+	"github.com/tsaqiffatih/mini-game/internal/observability"
+	"github.com/tsaqiffatih/mini-game/service"
 )
 
 type WebSocketMessage struct {
@@ -17,15 +19,23 @@ type WebSocketMessage struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
-type Message struct {
-	Action    string       `json:"action"`
-	Message   interface{}  `json:"message"`
-	Sender    *game.Player `json:"sender"`
-	TimeStamp time.Time    `json:"timestamp"`
+type Event struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+type EventPayload struct {
+	Message   string         `json:"message,omitempty"`
+	Player    *dto.PlayerDTO `json:"player,omitempty"`
+	Timestamp time.Time      `json:"timestamp"`
+}
+
+type RoomEventPayload struct {
+	Room dto.RoomSnapshotDTO `json:"room"`
+	Data json.RawMessage     `json:"data,omitempty"`
 }
 
 type ErrorMessage struct {
-	Type    string `json:"type"`
 	Message string `json:"message"`
 }
 
@@ -36,100 +46,99 @@ var upgrader = websocket.Upgrader{
 }
 
 const (
+	EventRoomUpdate   = "room_update"
+	EventGameUpdate   = "game_update"
+	EventPlayerJoined = "player_joined"
+	EventPlayerLeft   = "player_left"
+	EventChatMessage  = "chat_message"
+	EventChatHistory  = "chat_history"
+
+	writeWait  = 10 * time.Second
 	pingPeriod = 30 * time.Second
 	pongWait   = 60 * time.Second
 )
 
-func HandleWebSocket(w http.ResponseWriter, r *http.Request, roomManager *game.RoomManager, playerManager *game.PlayerManager) {
+func HandleWebSocket(
+	w http.ResponseWriter,
+	r *http.Request,
+	clients *ClientRegistry,
+	gameService *service.GameService) {
+
 	roomID := r.URL.Query().Get("room_id")
 	playerID := r.URL.Query().Get("player_id")
+	ctx, endSpan := observability.StartSpan(r.Context(), "websocket.connect")
+	var spanErr error
+	defer func() { endSpan(spanErr) }()
 
 	if !validateRoomAndPlayerIDs(w, roomID, playerID) {
 		return
 	}
 
-	room, player, err := getRoomAndPlayer(w, roomManager, roomID, playerID)
+	player, err := gameService.GetPlayerInRoomWithContext(ctx, roomID, playerID)
 	if err != nil {
+		spanErr = err
+		if err == service.ErrPlayerNotFound {
+			sendErrorResponse(w, "player not found in room", http.StatusNotFound)
+			return
+		}
+		sendErrorResponse(w, "could not find room", http.StatusNotFound)
 		return
 	}
 
 	// for upgrade http connection to WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		spanErr = err
 		sendErrorResponse(w, "could not upgrade connection", http.StatusBadRequest)
 		return
 	}
 	defer conn.Close()
 
-	setupPlayerConnection(player, conn)
+	client := clients.Attach(playerID, conn, pongWait)
+	_ = gameService.MarkPlayerConnectedWithContext(ctx, roomID, playerID)
 
-	go player.WritePump()
+	go client.WritePump(writeWait, pingPeriod)
 
-	log.Printf("Player %s connected to room %s", playerID, roomID)
+	observability.Logger().InfoContext(ctx, "websocket connected",
+		"room_id", roomID,
+		"player_id", playerID,
+		"event_type", "websocket_connected",
+	)
 
-	notifyRoomOnConnection(roomManager, room, player)
+	notifyRoomOnConnection(ctx, clients, gameService, roomID, player)
 
 	done := make(chan struct{})
 
 	// goroutine to read messages
-	go readMessages(conn, done, roomManager, room, player, playerManager)
-
-	// goroutine to handle ping pong
-	go handlePingPong(conn, done)
+	go readMessages(ctx, conn, done, clients, gameService, roomID, player, client)
 
 	<-done
-	fmt.Println("Socket connection closed")
+	observability.Logger().InfoContext(ctx, "websocket disconnected",
+		"room_id", roomID,
+		"player_id", playerID,
+		"event_type", "websocket_disconnected",
+	)
 
 	// goroutine for remove player after a delay
-	handlePlayerDisconnection(roomManager, room, playerID, player)
+	handlePlayerDisconnection(ctx, clients, gameService, roomID, playerID, player, client)
 }
 
-func setupPlayerConnection(player *game.Player, conn *websocket.Conn) {
-	player.Conn = conn
-	player.Send = make(chan []byte, 256)
-	conn.SetReadDeadline(time.Now().Add(pongWait))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+func handlePlayerDisconnection(ctx context.Context, clients *ClientRegistry, gameService *service.GameService, roomID string, playerID string, player game.PlayerSnapshot, client *Client) {
+	if !clients.RemoveClient(client) {
+		return
+	}
+	_ = gameService.MarkPlayerDisconnectedWithContext(ctx, roomID, playerID)
+
+	NotifyToClientsInRoom(clients, gameService, roomID, EventPlayerLeft, EventPayload{
+		Message:   fmt.Sprintf("Player %s left the room", playerID),
+		Player:    playerEventDTO(player),
+		Timestamp: time.Now(),
 	})
+
+	gameService.RemovePlayerAfterDelay(roomID, playerID, 30*time.Second, clients.IsConnected)
 }
 
-func handlePingPong(conn *websocket.Conn, done chan struct{}) {
-	ticker := time.NewTicker(pingPeriod)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				log.Println("Error sending ping:", err)
-				return
-			}
-		case <-done:
-			return
-		}
-	}
-}
-
-func handlePlayerDisconnection(roomManager *game.RoomManager, room *game.Room, playerID string, player *game.Player) {
-	player.Conn = nil
-	message := Message{
-		Action:  actions.USER_LEFT_ROOM,
-		Message: fmt.Sprintf("Player %s left the room", playerID),
-		Sender:  player,
-	}
-	NotifyToClientsInRoom(roomManager, room.RoomID, &message)
-
-	go removePlayerAfterDelay(roomManager, room, playerID)
-}
-
-func removePlayerAfterDelay(roomManager *game.RoomManager, room *game.Room, playerID string) {
-	time.Sleep(30 * time.Second)
-	room.Mu.Lock()
-	defer room.Mu.Unlock()
-
-	if player, exists := room.Players[playerID]; exists && player.Conn == nil {
-		delete(room.Players, playerID)
-		handleRoomAfterPlayerLeft(roomManager, room)
-		log.Println("removedplayer", playerID)
-	}
+func playerEventDTO(player game.PlayerSnapshot) *dto.PlayerDTO {
+	playerDTO := dto.FromPlayerSnapshot(player)
+	return &playerDTO
 }

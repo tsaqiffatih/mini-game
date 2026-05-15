@@ -52,7 +52,7 @@ function ChatOpened({
   }, [usersMessages]);
 
   return (
-    <div className="flex sm:pt-10 flex-col max-h-screen max-w-screen-sm rounded-lg overflow-hidden">
+    <div className="flex sm:pt-10 flex-col h-full max-h-screen max-w-screen-sm rounded-lg overflow-hidden">
       {/* Header */}
       <div className="bg-gray-200 p-3 border-x border-t rounded-t-lg border-black flex justify-between items-center">
         <h3 className="text-lg font-semibold text-gray-900">Chat</h3>

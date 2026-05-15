@@ -1,6 +1,24 @@
+@import "chessground/assets/chessground.base.css";
+@import "chessground/assets/chessground.brown.css";
+@import "chessground/assets/chessground.cburnett.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.cg-wrap piece {
+  transition-timing-function: ease-in-out;
+}
+
+.cg-wrap square.check {
+  background: rgba(255, 0, 0, 0.35);
+  box-shadow: inset 0 0 20px rgba(255, 0, 0, 0.8);
+}
+
+.cg-wrap coords {
+  color: white;
+  font-size: 10px;
+}
 
 .swal-theme-light {
   --swal-background: #ffffff;
@@ -49,3 +67,5 @@
   letter-spacing: 0.3em; 
   padding: 0.3em 0.6em
 }
+
+

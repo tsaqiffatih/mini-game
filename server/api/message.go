@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,141 +9,327 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/tsaqiffatih/mini-game/actions"
-	"github.com/tsaqiffatih/mini-game/chess"
+	"github.com/tsaqiffatih/mini-game/api/dto"
 	"github.com/tsaqiffatih/mini-game/game"
+	"github.com/tsaqiffatih/mini-game/internal/observability"
+	"github.com/tsaqiffatih/mini-game/service"
 )
 
 // message.go
-func readMessages(conn *websocket.Conn, done chan struct{}, roomManager *game.RoomManager, room *game.Room, player *game.Player, playerManager *game.PlayerManager) {
+func readMessages(
+	ctx context.Context,
+	conn *websocket.Conn,
+	done chan struct{},
+	clients *ClientRegistry,
+	gameService *service.GameService,
+	roomID string,
+	player game.PlayerSnapshot,
+	client *Client,
+) {
+
 	defer close(done)
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("Error reading message from conn:", err)
+			observability.Logger().InfoContext(ctx, "websocket read closed",
+				"room_id", roomID,
+				"player_id", player.ID,
+				"event_type", "websocket_read_closed",
+				"error", err,
+			)
 			break
 		}
 
-		var message Message
+		var message WebSocketMessage
 		if err := json.Unmarshal(msg, &message); err != nil {
-			sendErrorMessage(conn, "Invalid message format")
-			log.Println("Error unmarshalling message:", err)
+			sendErrorMessage(client, "Invalid message format")
+			observability.Logger().WarnContext(ctx, "websocket message unmarshal failed",
+				"room_id", roomID,
+				"player_id", player.ID,
+				"event_type", "websocket_message_invalid",
+				"error", err,
+			)
 			continue
 		}
 
-		playerManager.UpdatePlayerActivity(player.ID)
-		handleMessageAction(conn, roomManager, room, player, message)
+		observability.Logger().InfoContext(ctx, "websocket event received",
+			"room_id", roomID,
+			"player_id", player.ID,
+			"event_type", message.Type,
+		)
+
+		gameService.UpdatePlayerActivityWithContext(ctx, roomID, player.ID)
+		handleMessageAction(ctx, clients, gameService, roomID, player, client, message)
 	}
 }
 
-func handleMessageAction(conn *websocket.Conn, roomManager *game.RoomManager, room *game.Room, player *game.Player, message Message) {
-	switch message.Action {
+func handleMessageAction(
+	ctx context.Context,
+	clients *ClientRegistry,
+	gameService *service.GameService,
+	roomID string,
+	player game.PlayerSnapshot,
+	client *Client,
+	message WebSocketMessage,
+) {
+	switch message.Type {
 	case actions.TICTACTOE_MOVE:
-		processTicTacToeMove(conn, roomManager, message)
+		processTicTacToeMove(ctx, player, client, clients, gameService, roomID, message)
 	case actions.CHESS_MOVE:
-		processChessMove(conn, roomManager, room.RoomID, player.ID, message)
+		processChessMove(ctx, player, client, clients, gameService, roomID, player.ID, message)
+	case actions.CHESS_UNDO_REQUEST:
+		processChessUndo(ctx, player, client, clients, gameService, roomID)
+	case actions.CHAT_SEND:
+		processChatSend(ctx, player, client, clients, gameService, roomID, message)
 	case actions.CREATE_ROOM_WITH_AI:
-		room, err := roomManager.CreateRoomWithAI(message.Message.(string), "tictactoe")
-		if err != nil {
-			sendErrorMessage(conn, err.Error())
+		var requestedRoomID string
+		if err := json.Unmarshal(message.Payload, &requestedRoomID); err != nil {
+			sendErrorMessage(client, "Invalid create room payload")
 			return
 		}
-		NotifyToClientsInRoom(roomManager, room.RoomID, &Message{
-			Action:  actions.ROOM_CREATED,
-			Message: room,
-		})
+		event, err := gameService.CreateRoomWithAIByIDWithContext(ctx, requestedRoomID, "tictactoe")
+		if err != nil {
+			sendErrorMessage(client, err.Error())
+			return
+		}
+		NotifyToClientsInRoom(clients, gameService, event.RoomID, EventRoomUpdate, nil)
 	default:
-		NotifyToClientsInRoom(roomManager, room.RoomID, &message)
+		sendErrorMessage(client, "Unsupported message type")
+		log.Println(message.Type, "<<<<<<<<<<<")
 	}
 }
 
-func notifyRoomOnConnection(roomManager *game.RoomManager, room *game.Room, player *game.Player) {
-	message := Message{
-		Action:  actions.CONNECTED_ON_SERVER,
-		Message: fmt.Sprintf("Player %s connected to room %s", player.ID, room.RoomID),
-		Sender:  player,
-	}
-	NotifyToClientsInRoom(roomManager, room.RoomID, &message)
+func notifyRoomOnConnection(ctx context.Context, clients *ClientRegistry, gameService *service.GameService, roomID string, player game.PlayerSnapshot) {
+	NotifyToClientsInRoom(clients, gameService, roomID, EventPlayerJoined, EventPayload{
+		Message:   fmt.Sprintf("Player %s connected to room %s", player.ID, roomID),
+		Player:    playerEventDTO(player),
+		Timestamp: time.Now(),
+	})
 
-	switch room.GameState.GameType {
-	case "tictactoe":
-		NotifyTicTacToeClients(roomManager, room.RoomID)
-	case "chess":
-		notifyChessClients(roomManager, room, player)
-	}
-}
-
-func notifyChessClients(roomManager *game.RoomManager, room *game.Room, player *game.Player) {
-	if chessState, ok := room.GameState.Data.(*chess.ChessGameState); ok && chessState != nil {
-		message := Message{
-			Action:  actions.CHESS_GAME_STATE,
-			Message: chessState.FEN(),
-			Sender:  player,
-		}
-		NotifyToClientsInRoom(roomManager, room.RoomID, &message)
-	}
-
-	if room.IsActive {
-		message := Message{
-			Action:  actions.START_GAME,
-			Message: fmt.Sprintf("Player %s left the room", player.ID),
-			Sender:  player,
-		}
-		NotifyToClientsInRoom(roomManager, room.RoomID, &message)
-	}
-}
-
-func handleRoomAfterPlayerLeft(roomManager *game.RoomManager, room *game.Room) {
-
-	if len(room.Players) < 2 {
-		room.IsActive = false
-		switch room.GameState.GameType {
-		case "chess":
-			resetMarkChessRoom(roomManager, room)
-		case "tictactoe":
-			resetMarkTicTacToeRoom(roomManager, room)
-		default:
-			resetPlayerMarks(room)
-		}
-	}
-
-	if len(room.Players) == 0 {
-		roomManager.RemoveRoom(room.RoomID)
-	}
-}
-
-func sendErrorMessage(conn *websocket.Conn, message string) {
-	errorMessage := ErrorMessage{
-		Type:    "error",
-		Message: message,
-	}
-	if err := conn.WriteJSON(errorMessage); err != nil {
-		log.Println("Error sending error message:", err)
-	}
-}
-
-func NotifyToClientsInRoom(roomManager *game.RoomManager, roomID string, message *Message) {
-	room, err := roomManager.GetRoomByID(roomID)
+	snapshot, err := gameService.RoomSnapshotWithContext(ctx, roomID)
 	if err != nil {
-		log.Println("Error getting room NotifyClients:", err)
+		observability.Logger().WarnContext(ctx, "room snapshot failed",
+			"room_id", roomID,
+			"player_id", player.ID,
+			"event_type", "room_snapshot_error",
+			"error", err,
+		)
 		return
 	}
 
-	message.TimeStamp = time.Now()
+	sendRoomSnapshotToClient(clientForPlayer(clients, player.ID), snapshot)
+	sendChatHistoryToClient(ctx, clients, gameService, roomID, player.ID)
+}
 
-	messageBytes, err := json.Marshal(message)
+func notifyChessClients(clients *ClientRegistry, gameService *service.GameService, roomID string, player game.PlayerSnapshot) {
+	snapshot, err := gameService.RoomSnapshot(roomID)
 	if err != nil {
-		log.Println("Error marshalling message:", err)
+		observability.Logger().Warn("room snapshot failed",
+			"room_id", roomID,
+			"player_id", player.ID,
+			"event_type", "room_snapshot_error",
+			"error", err,
+		)
 		return
 	}
 
-	for _, player := range room.Players {
-		if player.Conn != nil {
-			select {
-			case player.Send <- messageBytes:
-			default:
-				close(player.Send)
-				delete(room.Players, player.ID)
+	NotifySnapshotToClients(clients, snapshot, Event{
+		Type:    EventGameUpdate,
+		Payload: marshalPayload(dto.FromRoomSnapshot(snapshot)),
+	})
+}
+
+func sendErrorMessage(client *Client, message string) {
+	sendEvent(client, "error", ErrorMessage{Message: message})
+}
+
+func processChatSend(
+	ctx context.Context,
+	player game.PlayerSnapshot,
+	client *Client,
+	clients *ClientRegistry,
+	gameService *service.GameService,
+	roomID string,
+	message WebSocketMessage,
+) {
+	var payload dto.ChatSendPayload
+	if err := json.Unmarshal(message.Payload, &payload); err != nil {
+		sendErrorMessage(client, "Invalid chat payload")
+		return
+	}
+
+	chatMessage, err := gameService.HandleChatMessageWithContext(ctx, roomID, player.ID, payload.Message)
+	if err != nil {
+		sendErrorMessage(client, err.Error())
+		return
+	}
+
+	snapshot, err := gameService.RoomSnapshotWithContext(ctx, roomID)
+	if err != nil {
+		observability.Logger().WarnContext(ctx, "room snapshot failed after chat message",
+			"room_id", roomID,
+			"player_id", player.ID,
+			"event_type", "room_snapshot_error",
+			"error", err,
+		)
+		return
+	}
+
+	NotifySnapshotToClients(clients, snapshot, Event{
+		Type:    EventChatMessage,
+		Payload: marshalPayload(dto.FromChatMessageEvent(chatMessage)),
+	})
+}
+
+func sendChatHistoryToClient(ctx context.Context, clients *ClientRegistry, gameService *service.GameService, roomID string, playerID string) {
+	client := clientForPlayer(clients, playerID)
+	if client == nil {
+		return
+	}
+
+	history, err := gameService.ChatHistoryWithContext(ctx, roomID)
+	if err != nil {
+		observability.Logger().WarnContext(ctx, "chat history failed",
+			"room_id", roomID,
+			"player_id", playerID,
+			"event_type", "chat_history_error",
+			"error", err,
+		)
+		return
+	}
+
+	sendEvent(client, EventChatHistory, dto.FromChatHistory(history))
+}
+
+func NotifyToClientsInRoom(
+	clients *ClientRegistry,
+	gameService *service.GameService,
+	roomID string,
+	eventType string,
+	payload interface{},
+) {
+	snapshot, err := gameService.RoomSnapshot(roomID)
+	if err != nil {
+		observability.Logger().Warn("room snapshot failed",
+			"room_id", roomID,
+			"player_id", "",
+			"event_type", "room_snapshot_error",
+			"error", err,
+		)
+		return
+	}
+
+	if eventType == EventRoomUpdate {
+		NotifyRoomUpdateToClients(clients, snapshot)
+		return
+	}
+
+	NotifySnapshotToClients(clients, snapshot, Event{
+		Type: eventType,
+		Payload: marshalPayload(RoomEventPayload{
+			Room: dto.FromRoomSnapshot(snapshot),
+			Data: marshalPayload(payload),
+		}),
+	})
+}
+
+func NotifyRoomUpdateToClients(clients *ClientRegistry, snapshot game.RoomSnapshot) {
+	NotifySnapshotToClients(clients, snapshot, Event{
+		Type:    EventRoomUpdate,
+		Payload: marshalPayload(dto.FromRoomSnapshot(snapshot)),
+	})
+}
+
+func NotifySnapshotToClients(clients *ClientRegistry, snapshot game.RoomSnapshot, events ...Event) {
+	if len(events) == 0 {
+		events = []Event{{Type: EventRoomUpdate, Payload: marshalPayload(dto.FromRoomSnapshot(snapshot))}}
+	}
+
+	for _, event := range events {
+		messageBytes, err := json.Marshal(event)
+		if err != nil {
+			observability.Logger().Warn("websocket event marshal failed",
+				"room_id", snapshot.RoomID,
+				"player_id", "",
+				"event_type", event.Type,
+				"error", err,
+			)
+			return
+		}
+
+		for _, player := range snapshot.Players {
+			client, connected := clients.Get(player.ID)
+			if !connected {
+				continue
+			}
+			if !client.Enqueue(messageBytes) {
+				clients.RemoveClient(client)
 			}
 		}
 	}
+}
+
+func NotifyGameUpdateToClients(clients *ClientRegistry, snapshot game.RoomSnapshot) {
+	NotifySnapshotToClients(clients, snapshot, Event{
+		Type:    EventGameUpdate,
+		Payload: marshalPayload(dto.FromRoomSnapshot(snapshot)),
+	})
+}
+
+func sendRoomSnapshotToClient(client *Client, snapshot game.RoomSnapshot) {
+	if client == nil {
+		return
+	}
+
+	sendEvent(client, EventRoomUpdate, dto.FromRoomSnapshot(snapshot))
+}
+
+func sendEvent(client *Client, eventType string, payload interface{}) {
+	if client == nil {
+		return
+	}
+
+	messageBytes, err := json.Marshal(Event{
+		Type:    eventType,
+		Payload: marshalPayload(payload),
+	})
+	if err != nil {
+		observability.Logger().Warn("websocket event marshal failed",
+			"room_id", "",
+			"player_id", client.PlayerID,
+			"event_type", eventType,
+			"error", err,
+		)
+		return
+	}
+
+	if !client.Enqueue(messageBytes) {
+		observability.Logger().Warn("websocket client send queue full",
+			"room_id", "",
+			"player_id", client.PlayerID,
+			"event_type", "websocket_slow_client",
+		)
+	}
+}
+
+func marshalPayload(payload interface{}) json.RawMessage {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		observability.Logger().Warn("websocket payload marshal failed",
+			"room_id", "",
+			"player_id", "",
+			"event_type", "websocket_payload_error",
+			"error", err,
+		)
+		return json.RawMessage(`{}`)
+	}
+	return payloadBytes
+}
+
+func clientForPlayer(clients *ClientRegistry, playerID string) *Client {
+	client, connected := clients.Get(playerID)
+	if !connected {
+		return nil
+	}
+	return client
 }

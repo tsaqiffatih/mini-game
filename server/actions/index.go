@@ -2,9 +2,16 @@ package actions
 
 const (
 	// chess
-	CHESS_GAME_STATE = "CHESS_GAME_STATE"
-	CHESS_MOVE       = "CHESS_MOVE"
-	START_GAME       = "START_GAME"
+	CHESS_GAME_STATE    = "CHESS_GAME_STATE"
+	CHESS_MOVE          = "CHESS_MOVE"
+	CHESS_UNDO_REQUEST  = "CHESS_UNDO_REQUEST"
+	CHESS_MOVE_REJECTED = "chess_move_rejected"
+	START_GAME          = "START_GAME"
+
+	// chat
+	CHAT_SEND    = "CHAT_SEND"
+	CHAT_MESSAGE = "chat_message"
+	CHAT_HISTORY = "chat_history"
 
 	// room
 	CONNECTED_ON_SERVER = "CONNECTED_ON_SERVER"

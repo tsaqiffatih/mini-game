@@ -1,5 +1,9 @@
 .env
-node_modules/
-build/
 features.md
 test.md
+tmp
+note.md
+.github
+bin/
+.tmp
+stockfish/

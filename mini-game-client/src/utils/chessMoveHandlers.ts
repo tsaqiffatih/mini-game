@@ -6,19 +6,17 @@ export type PromotionPiece = "q" | "r" | "b" | "n";
 
 export function sendChessMove(
   sendMessage: SendMessageFn,
-  playerId: string,
   from: Square,
   to: Square,
   promotion?: PromotionPiece
 ): boolean {
   const payload = {
-    action: "CHESS_MOVE",
-    message: {
+    type: "move",
+    payload: {
       from,
       to,
       ...(promotion ? { promotion } : {}),
     },
-    sender: { player_id: playerId },
   };
 
   try {

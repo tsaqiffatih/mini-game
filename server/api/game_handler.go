@@ -1,289 +1,236 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
-	"log"
-	"time"
+	"strings"
 
-	"github.com/gorilla/websocket"
 	"github.com/tsaqiffatih/mini-game/actions"
-	"github.com/tsaqiffatih/mini-game/chess"
+	"github.com/tsaqiffatih/mini-game/api/dto"
 	"github.com/tsaqiffatih/mini-game/game"
-	"github.com/tsaqiffatih/mini-game/tictactoe"
+	"github.com/tsaqiffatih/mini-game/internal/observability"
+	"github.com/tsaqiffatih/mini-game/service"
 )
 
 // Shared utility functions
-func parsePayload(conn *websocket.Conn, rawMessage interface{}, payload interface{}) bool {
-	payloadBytes, err := json.Marshal(rawMessage)
-	if err != nil {
-		sendErrorMessage(conn, "Failed to marshal raw message into JSON")
-		log.Println("Error marshalling payload:", err)
-		return false
-	}
-	if err := json.Unmarshal(payloadBytes, payload); err != nil {
-		sendErrorMessage(conn, "Failed to unmarshal JSON into payload struct")
-		log.Println("Error unmarshalling payload:", err)
+func parsePayload(ctx context.Context, client *Client, roomID, eventType string, rawMessage json.RawMessage, payload interface{}) bool {
+	if err := json.Unmarshal(rawMessage, payload); err != nil {
+		sendErrorMessage(client, "Failed to unmarshal JSON into payload struct")
+		observability.Logger().WarnContext(ctx, "websocket payload unmarshal failed",
+			"room_id", roomID,
+			"player_id", client.PlayerID,
+			"event_type", eventType,
+			"error", err,
+		)
 		return false
 	}
 	return true
 }
 
-func resetPlayerMarks(room *game.Room) {
-	if room.GameState.GameType == "tictactoe" {
-		if _, ok := room.GameState.Data.(*tictactoe.TictactoeGameState); ok {
-			// ticTacToe: reset ke "X" jika tinggal satu pemain
-			for _, player := range room.Players {
-				player.Mark = "X"
-				log.Printf("Player %s mark reset to X for TicTacToe", player.ID)
-				break
-			}
-		}
-	} else if room.GameState.GameType == "chess" {
-		// chess: reset ke "white" jika tinggal satu pemain
-		if _, ok := room.GameState.Data.(*chess.ChessGameState); ok {
-			for _, player := range room.Players {
-				player.Mark = "white"
-				log.Printf("Player %s mark reset to white for Chess", player.ID)
-				break
-			}
-		}
-
-	} else {
-		log.Println("game state is not recognized")
-	}
-}
-
 // TicTacToe-related functions
-func processTicTacToeMove(conn *websocket.Conn, roomManager *game.RoomManager, message Message) {
-	var payload tictactoe.TictactoeMovePayload
-	if !parsePayload(conn, message.Message, &payload) {
+func processTicTacToeMove(
+	ctx context.Context,
+	player game.PlayerSnapshot,
+	client *Client,
+	clients *ClientRegistry,
+	gameService *service.GameService,
+	roomID string,
+	message WebSocketMessage,
+) {
+	var payload dto.TictactoeMovePayload
+	if !parsePayload(ctx, client, roomID, message.Type, message.Payload, &payload) {
 		return
 	}
-	handleMakeMoveTictactoe(roomManager, payload, conn)
+	handleMakeMoveTictactoe(
+		ctx,
+		client,
+		clients,
+		gameService,
+		roomID,
+		player.ID,
+		payload,
+	)
 }
 
-func resetMarkTicTacToeRoom(roomManager *game.RoomManager, room *game.Room) {
-	if tictactoeGameState, ok := room.GameState.Data.(*tictactoe.TictactoeGameState); ok {
-		resetPlayerMarks(room)
-
-		playerMarks := make(map[string]string)
-		for _, player := range room.Players {
-			playerMarks[player.ID] = player.Mark
-		}
-		message := Message{
-			Action: actions.MARK_UPDATE,
-			Message: map[string]interface{}{
-				"marks": playerMarks,
-			},
-		}
-
-		tictactoeGameState.IsActive = false
-		tictactoeGameState.Board = [3][3]string{}
-		tictactoeGameState.Turn = "X"
-
-		NotifyToClientsInRoom(roomManager, room.RoomID, &message)
-		NotifyTicTacToeClients(roomManager, room.RoomID)
+func handleMakeMoveTictactoe(
+	ctx context.Context,
+	client *Client,
+	clients *ClientRegistry,
+	gameService *service.GameService,
+	roomID string,
+	playerID string,
+	payload dto.TictactoeMovePayload,
+) {
+	_, err := gameService.HandleTicTacToeMoveWithContext(
+		ctx,
+		roomID,
+		playerID,
+		payload.Row,
+		payload.Col,
+	)
+	if err != nil {
+		sendErrorMessage(client, err.Error())
+		return
 	}
+
+	NotifyTicTacToeClients(clients, gameService, roomID)
 }
 
-func handleMakeMoveTictactoe(roomManager *game.RoomManager, payload tictactoe.TictactoeMovePayload, conn *websocket.Conn) {
-	room, err := roomManager.GetRoomByID(payload.RoomID)
+func NotifyTicTacToeClients(clients *ClientRegistry, gameService *service.GameService, roomID string) {
+	snapshot, err := gameService.RoomSnapshot(roomID)
 	if err != nil {
-		sendErrorMessage(conn, "Room not found")
-		log.Println("Room not found:", payload.RoomID)
+		observability.Logger().Warn("room snapshot failed",
+			"room_id", roomID,
+			"player_id", "",
+			"event_type", "room_snapshot_error",
+			"error", err,
+		)
 		return
 	}
 
-	player, exists := room.Players[payload.PlayerID]
-	if !exists {
-		sendErrorMessage(conn, "Player not found in room")
-		log.Println("Player not found in room:", payload.PlayerID)
+	if snapshot.GameType != "tictactoe" || snapshot.TicTacToe == nil {
 		return
 	}
 
-	player.LastActive = time.Now()
-
-	tictactoeGameState, ok := room.GameState.Data.(*tictactoe.TictactoeGameState)
-	if !ok {
-		sendErrorMessage(conn, "Invalid game state")
-		log.Println("Invalid game state for room:", payload.RoomID)
-		return
-	}
-	err = tictactoeGameState.UpdateState(player.Mark, payload.Row, payload.Col)
-	if err != nil {
-		sendErrorMessage(conn, err.Error())
-		log.Println("Error making move:", err)
-		return
-	}
-
-	NotifyTicTacToeClients(roomManager, payload.RoomID)
-
-	if !tictactoeGameState.IsActive {
-		time.Sleep(5 * time.Second)
-		tictactoeGameState.ResetGame()
-		NotifyTicTacToeClients(roomManager, payload.RoomID)
-		return
-	}
-
-	// Trigger AI move if the opponent is AIbled
-	if room.IsAIEnabled {
-		tictactoeGameState.MakeAIMove()
-		NotifyTicTacToeClients(roomManager, payload.RoomID)
-	}
-}
-
-func NotifyTicTacToeClients(roomManager *game.RoomManager, roomID string) {
-	room, err := roomManager.GetRoomByID(roomID)
-	if err != nil {
-		log.Println("Error getting room NotifyClients:", err)
-		return
-	}
-
-	gameState := room.GameState
-	for _, player := range room.Players {
-		if player.Conn != nil {
-			if room.GameState.GameType == "tictactoe" {
-				if tictactoeGameState, ok := gameState.Data.(*tictactoe.TictactoeGameState); ok {
-					sendTictactoeGameState(player, tictactoeGameState)
-				}
-			}
-		}
-	}
-}
-
-func sendTictactoeGameState(player *game.Player, gameState *tictactoe.TictactoeGameState) {
-	board, turn, winner, isActive := gameState.GetState()
-	response := tictactoe.TicTacToeGameResponse{
-		Board:    board,
-		Turn:     turn,
-		Winner:   winner,
-		IsActive: isActive,
-	}
-
-	message := Message{
-		Action:  actions.TICTACTOE_GAME_STATE,
-		Message: response,
-		Sender: &game.Player{
-			ID:         player.ID,
-			Mark:       player.Mark,
-			Conn:       nil,
-			LastActive: player.LastActive,
-			Send:       nil,
-		},
-	}
-
-	messageBytes, err := json.Marshal(message)
-	if err != nil {
-		log.Println("Error marshalling game state message:", err)
-		return
-	}
-
-	select {
-	case player.Send <- messageBytes:
-	default:
-		close(player.Send)
-	}
+	NotifySnapshotToClients(clients, snapshot, Event{
+		Type:    EventGameUpdate,
+		Payload: marshalPayload(dto.FromRoomSnapshot(snapshot)),
+	})
 }
 
 // Chess-related functions
-func processChessMove(conn *websocket.Conn, roomManager *game.RoomManager, roomID string, playerId string, message Message) {
+func processChessMove(
+	ctx context.Context,
+	player game.PlayerSnapshot,
+	client *Client,
+	clients *ClientRegistry,
+	gameService *service.GameService,
+	roomID string,
+	playerID string,
+	message WebSocketMessage) {
 
-	var payload chess.ChessMovePayload
-	if !parsePayload(conn, message.Message, &payload) {
+	var payload dto.ChessMovePayload
+	if err := json.Unmarshal(message.Payload, &payload); err != nil {
+		sendChessMoveRejectedWithCode(client, roomID, playerID, payload, "invalid_payload", "Invalid chess move payload")
+		observability.Logger().WarnContext(ctx, "websocket chess move payload unmarshal failed",
+			"room_id", roomID,
+			"player_id", client.PlayerID,
+			"event_type", message.Type,
+			"error", err,
+		)
 		return
 	}
-	handleChessMove(roomManager, roomID, playerId, payload, conn)
+	handleChessMove(
+		ctx,
+		client,
+		clients,
+		gameService,
+		roomID,
+		playerID,
+		payload,
+	)
 }
 
-func resetMarkChessRoom(roomManager *game.RoomManager, room *game.Room) {
-	resetPlayerMarks(room)
+func handleChessMove(
+	ctx context.Context,
+	client *Client,
+	clients *ClientRegistry,
+	gameService *service.GameService,
+	roomID string,
+	playerID string,
+	payload dto.ChessMovePayload,
+) {
+	if _, err := gameService.HandleChessMoveWithContext(
+		ctx,
+		roomID,
+		playerID,
+		payload.From,
+		payload.To,
+		payload.Promotion,
+	); err != nil {
+		sendChessMoveRejected(client, roomID, playerID, payload, err)
+		return
+	}
 
-	playerMarks := make(map[string]string)
-	for _, player := range room.Players {
-		playerMarks[player.ID] = player.Mark
+	snapshot, err := gameService.RoomSnapshotWithContext(ctx, roomID)
+	if err != nil {
+		observability.Logger().WarnContext(ctx, "room snapshot failed after chess move",
+			"room_id", roomID,
+			"player_id", playerID,
+			"event_type", "room_snapshot_error",
+			"error", err,
+		)
+		return
 	}
-	message := Message{
-		Action: actions.MARK_UPDATE,
-		Message: map[string]interface{}{
-			"marks":  playerMarks,
-			"active": room.IsActive,
-		},
-	}
-	log.Println("room isActive =>", room.IsActive)
-	NotifyToClientsInRoom(roomManager, room.RoomID, &message)
 
-	// if gameState, ok := room.GameState.Data.(string); ok && gameState != "" {
-	// 	room.GameState.Data = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-	// 	message := Message{
-	// 		Action:  "CHESS_GAME_STATE",
-	// 		Message: room.GameState.Data,
-	// 	}
-	// 	NotifyToClientsInRoom(roomManager, room.RoomID, &message)
-	// }
-	// If game state exists and is chess, reset to starting position
-	if chessGameState, ok := room.GameState.Data.(*chess.ChessGameState); ok && chessGameState != nil {
-		// replace with new fresh game
-		room.GameState.Data = chess.NewChessGameState()
-		message := Message{
-			Action:  actions.CHESS_GAME_STATE,
-			Message: room.GameState.Data.(*chess.ChessGameState).FEN(),
-		}
-		NotifyToClientsInRoom(roomManager, room.RoomID, &message)
-	}
+	NotifySnapshotToClients(clients, snapshot, Event{
+		Type:    EventGameUpdate,
+		Payload: marshalPayload(dto.FromRoomSnapshot(snapshot)),
+	})
 }
 
-func handleChessMove(roomManager *game.RoomManager, roomID, playerID string, payload chess.ChessMovePayload, conn *websocket.Conn) {
+func processChessUndo(
+	ctx context.Context,
+	player game.PlayerSnapshot,
+	client *Client,
+	clients *ClientRegistry,
+	gameService *service.GameService,
+	roomID string,
+) {
+	if err := gameService.HandleChessUndoWithContext(ctx, roomID, player.ID); err != nil {
+		sendErrorMessage(client, err.Error())
+		return
+	}
 
-	room, err := roomManager.GetRoomByID(roomID)
+	snapshot, err := gameService.RoomSnapshotWithContext(ctx, roomID)
 	if err != nil {
-		log.Println("Room not found:", err)
-		sendErrorMessage(conn, "Room not found")
+		observability.Logger().WarnContext(ctx, "room snapshot failed after chess undo",
+			"room_id", roomID,
+			"player_id", player.ID,
+			"event_type", "room_snapshot_error",
+			"error", err,
+		)
 		return
 	}
 
-	player, exist := room.Players[playerID]
-	if !exist {
-		sendErrorMessage(conn, "Player not found in room")
-		log.Println("Player not found in room:", playerID)
-		return
+	NotifySnapshotToClients(clients, snapshot, Event{
+		Type:    EventGameUpdate,
+		Payload: marshalPayload(dto.FromRoomSnapshot(snapshot)),
+	})
+}
+
+func sendChessMoveRejected(client *Client, roomID string, playerID string, payload dto.ChessMovePayload, err error) {
+	sendChessMoveRejectedWithCode(client, roomID, playerID, payload, chessMoveRejectionCode(err), err.Error())
+}
+
+func sendChessMoveRejectedWithCode(client *Client, roomID string, playerID string, payload dto.ChessMovePayload, code string, message string) {
+	sendEvent(client, actions.CHESS_MOVE_REJECTED, dto.ChessMoveRejectedDTO{
+		RoomID:        roomID,
+		PlayerID:      playerID,
+		AttemptedMove: payload,
+		Code:          code,
+		Message:       message,
+		Sound:         "illegal",
+	})
+}
+
+func chessMoveRejectionCode(err error) string {
+	if err == nil {
+		return "unknown"
 	}
-
-	// if room.GameState.GameType != "chess" {
-	// 	log.Println("Invalid game type for chess move")
-	// 	sendErrorMessage(conn, "Invalid game type for chess move")
-	// 	return
-	// }
-
-	// Expect the backend to hold a ChessGameState
-	chessGameState, ok := room.GameState.Data.(*chess.ChessGameState)
-	if !ok || chessGameState == nil {
-		log.Println("Invalid chess game state stored in room")
-		sendErrorMessage(conn, "Invalid chess game state")
-		return
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "not your turn"):
+		return "not_your_turn"
+	case strings.Contains(message, "promotion required"):
+		return "promotion_required"
+	case strings.Contains(message, "game is not active"), strings.Contains(message, "game not active"):
+		return "game_not_active"
+	case strings.Contains(message, "player not found"):
+		return "player_not_in_room"
+	case strings.Contains(message, "illegal move"), strings.Contains(message, "invalid move"):
+		return "illegal_move"
+	default:
+		return "invalid_move"
 	}
-
-	// apply move using backend chess engine (UCI: from+to)
-	result, err := chessGameState.UpdateState(player.Mark, payload.From, payload.To, payload.Promotion)
-	if err != nil {
-		// illegal move — notify sender (and optionally broadcast error)
-		log.Println("Illegal chess move attempted:", err)
-		sendErrorMessage(conn, "Illegal chess move: "+err.Error())
-		return
-	}
-
-	// broadcast the authoritative FEN from backend
-	newFen := chessGameState.FEN()
-	message := Message{
-		Action: actions.CHESS_MOVE,
-		Message: map[string]interface{}{
-			"fen":      newFen,
-			"lastMove": payload,
-			"result":   result,
-		},
-		Sender: &game.Player{ID: playerID},
-	}
-
-	log.Printf("DEBUG CHESS_MOVE (server-validated): %+v\n", message)
-
-	NotifyToClientsInRoom(roomManager, roomID, &message)
 }

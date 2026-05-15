@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import Modal from "./Modal";
-import axios, { AxiosError } from "axios";
 import { showErrorAlert, showSuccessAlert } from "@/utils/alerthelper";
 import { useRouter } from "next/navigation";
+import axios from "axios";
 
 interface RegisterUserProps {
   onRegister: () => void;
@@ -15,7 +15,7 @@ const backendUrl = process.env.NEXT_PUBLIC_HTTP_BACKEND_URL;
 export default function RegisterUser({ onRegister }: RegisterUserProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState({
-    userName: "",
+    player_id: "",
   });
 
   const router = useRouter();
@@ -27,34 +27,45 @@ export default function RegisterUser({ onRegister }: RegisterUserProps) {
 
   const handleForm = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setIsModalOpen(false);
 
     try {
       const { data } = await axios.post(`${backendUrl}/create/user`, {
-        player_id: formData.userName,
+        player_id: formData.player_id,
       });
 
-      if (!data.success) {
-        throw new Error(data.data.message);
-      }
+      const playerId = data?.data?.player_id;
+
+      localStorage.setItem("playerId", playerId);
 
       await showSuccessAlert("Success Create Player");
-      
-      localStorage.setItem("playerId", data.data.player_id);
 
-      onRegister()
-
+      setIsModalOpen(false);
+      onRegister();
       router.push("/");
-    } catch (err) {
-      const error = err as AxiosError<{ message: string }>;
+    } catch (error: any) {
+      handleHttpError(error);
+    }
+  };
 
-      if (error.response?.data) {
-        await showErrorAlert(
-          error.response.data.message || "Unexpected error occurred."
-        );
-      } else {
-        await showErrorAlert("Error registering player.");
-      }
+  const handleHttpError = (error: unknown) => {
+    if (!axios.isAxiosError(error)) {
+      showErrorAlert("Unknown error occurred.");
+      return;
+    }
+
+    const msg = error.response?.data?.error;
+
+    switch (msg) {
+      case "player already exists, choose another name":
+        showErrorAlert("Username already exists. Please choose another one.");
+        break;
+
+      case "invalid JSON":
+        showErrorAlert("Invalid request.");
+        break;
+
+      default:
+        showErrorAlert(msg || "An error occurred. Please try again.");
     }
   };
 
@@ -98,8 +109,8 @@ export default function RegisterUser({ onRegister }: RegisterUserProps) {
               type="text"
               placeholder="Input your Username"
               required
-              name="userName"
-              value={formData.userName}
+              name="player_id"
+              value={formData.player_id}
               onChange={handleChange}
             />
           </div>

@@ -8,12 +8,13 @@ export const useGameWebSocket = (roomId: string, playerId: string) => {
     `${backendUrl}/ws?room_id=${roomId}&player_id=${playerId}`,
     {
       onOpen: () => {
-        if (process.env.NODE_ENV === 'development') {
+        if (process.env.NODE_ENV === "development") {
           console.log("WebSocket connected");
         }
+        // sendMessage(JSON.stringify({ type: "join" }));
       },
       onError: (event) => {
-        if (process.env.NODE_ENV === 'development') {
+        if (process.env.NODE_ENV === "development") {
           console.log("WebSocket error: ", event);
         }
         showErrorAlert(

@@ -1,4 +1,4 @@
-'use client'
+"use client";
 
 import Lobby from "@/components/Lobby";
 import TicTacToeBoard from "@/components/TicTacToeBoard";
@@ -6,29 +6,28 @@ import { showAlert, showErrorAlert } from "@/utils/alerthelper";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-
 const TicTacToePage: React.FC = () => {
   const [playerId, setPlayerId] = useState<string>("");
   const [roomId, setRoomId] = useState<string>("");
   const [playerMark, setPlayerMark] = useState<string>("");
 
-  const router = useRouter()
+  const router = useRouter();
 
-  const handleRoomIdGenerated = (roomId: string, playerMark: string) => {
+  const handleRoomReady = (roomId: string, playerMark: string) => {
     setRoomId(roomId);
     setPlayerMark(playerMark);
   };
 
   useEffect(() => {
     const storedPlayerId = localStorage.getItem("playerId") || "";
-    if (storedPlayerId === "") {
-      showErrorAlert("Player ID not found. Please register first.");
+    if (!storedPlayerId) {
+      showErrorAlert("Player not found. Please register first.");
       router.push("/");
+      return;
     }
-    const storedRoomId = localStorage.getItem("roomId") || "";
-    const storedPlayerMark = localStorage.getItem("playerMark") || "";
-    setPlayerMark(storedPlayerMark);
-    setRoomId(storedRoomId);
+
+    setPlayerMark(localStorage.getItem("playerMark") || "");
+    setRoomId(localStorage.getItem("roomId") || "");
     setPlayerId(storedPlayerId);
   }, [router]);
 
@@ -78,7 +77,7 @@ const TicTacToePage: React.FC = () => {
       {!roomId ? (
         <Lobby
           playerId={playerId}
-          onRoomIdGenerated={handleRoomIdGenerated}
+          onRoomReady={handleRoomReady}
           gameType="tictactoe"
         />
       ) : (

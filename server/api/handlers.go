@@ -2,49 +2,45 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"sync"
-	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/tsaqiffatih/mini-game/api/dto"
 	"github.com/tsaqiffatih/mini-game/game"
+	"github.com/tsaqiffatih/mini-game/service"
 )
 
 type Response struct {
 	Success bool        `json:"success"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
+	Data    interface{} `json:"data"`
+	Error   *string     `json:"error"`
+	Message string      `json:"-"`
 }
 
-var mu sync.Mutex
-
-func RegisterRouter(r *mux.Router, roomManager *game.RoomManager, playerManager *game.PlayerManager) {
+func RegisterRouter(r *mux.Router, clients *ClientRegistry, gameService *service.GameService) {
 	r.HandleFunc("/create/user", func(w http.ResponseWriter, r *http.Request) {
-		addPlayer(w, r, playerManager)
+		addPlayer(w, r, gameService)
 	}).Methods("POST")
 
 	r.HandleFunc("/room/join", func(w http.ResponseWriter, r *http.Request) {
-		joinRoom(w, r, roomManager, playerManager)
+		joinRoom(w, r, gameService)
 	}).Methods("POST")
 
 	r.HandleFunc("/room/create", func(w http.ResponseWriter, r *http.Request) {
-		createRoom(w, r, roomManager, playerManager)
+		createRoom(w, r, gameService)
 	}).Methods("POST")
 
 	r.HandleFunc("/room/create/ai", func(w http.ResponseWriter, r *http.Request) {
-		createRoomWithAi(w, r, roomManager, playerManager)
+		createRoomWithAi(w, r, gameService)
 	}).Methods("POST")
 
 	r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		HandleWebSocket(w, r, roomManager, playerManager)
+		HandleWebSocket(w, r, clients, gameService)
 	})
 
 }
 
-func createRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomManager, playerManager *game.PlayerManager) {
-	mu.Lock()
-	defer mu.Unlock()
+func createRoom(w http.ResponseWriter, r *http.Request, gameService *service.GameService) {
 
 	var request struct {
 		GameType string `json:"game_type"`
@@ -52,150 +48,42 @@ func createRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomMa
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		response := Response{
-			Success: false,
-			Message: "Invalid request",
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
-	// Validasi input request
-	if request.GameType == "" {
-		response := Response{
-			Success: false,
-			Message: "RoomID and GameType are required",
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	player, err := playerManager.GetPlayer(request.PlayerID)
+	res, err := gameService.CreateRoomWithContext(r.Context(), request.GameType, request.PlayerID)
 	if err != nil {
-		response := Response{
-			Success: false,
-			Message: "Player not found",
-		}
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(response)
+		writeErrorResponse(w, createRoomStatus(err), err.Error())
 		return
 	}
 
-	roomId := roomManager.GenerateRandomRoomCode()
-
-	fmt.Println("Room created handlers:", roomId)
-
-	room, err := roomManager.CreateRoom(roomId, request.GameType)
-	if err != nil {
-		response := Response{
-			Success: false,
-			Message: err.Error(),
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	res, err := roomManager.JoinRoom(room.RoomID, player)
-	if err != nil {
-		response := Response{
-			Success: false,
-			Message: err.Error(),
-		}
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	response := Response{
-		Success: true,
-		Message: "Room created successfully",
-		Data:    res,
-	}
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+	writeSuccessResponse(w, http.StatusCreated, dto.FromJoinRoomResponse(res))
 }
 
-func createRoomWithAi(w http.ResponseWriter, r *http.Request, roomManager *game.RoomManager, playerManager *game.PlayerManager) {
-	mu.Lock()
-	defer mu.Unlock()
+func createRoomWithAi(w http.ResponseWriter, r *http.Request, gameService *service.GameService) {
 
 	var request struct {
 		GameType string `json:"game_type"`
 		PlayerID string `json:"player_id"`
+		AILevel  int    `json:"ai_level,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		response := Response{
-			Success: false,
-			Message: "Invalid request",
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
-	if request.GameType == "" {
-		response := Response{
-			Success: false,
-			Message: "RoomID and GameType are required",
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	player, err := playerManager.GetPlayer(request.PlayerID)
+	res, err := gameService.CreateRoomWithAILevelWithContext(r.Context(), request.GameType, request.PlayerID, request.AILevel)
 	if err != nil {
-		response := Response{
-			Success: false,
-			Message: "Player not found",
-		}
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(response)
+		writeErrorResponse(w, createRoomStatus(err), err.Error())
 		return
 	}
 
-	roomId := roomManager.GenerateRandomRoomCode()
-
-	fmt.Println("Room created handlers:", roomId)
-
-	room, err := roomManager.CreateRoomWithAI(roomId, request.GameType)
-	if err != nil {
-		response := Response{
-			Success: false,
-			Message: err.Error(),
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	res, err := roomManager.JoinRoom(room.RoomID, player)
-	if err != nil {
-		response := Response{
-			Success: false,
-			Message: err.Error(),
-		}
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	response := Response{
-		Success: true,
-		Message: "Room created successfully",
-		Data:    res,
-	}
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+	writeSuccessResponse(w, http.StatusCreated, dto.FromJoinRoomResponse(res))
 }
 
-func joinRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomManager, playerManager *game.PlayerManager) {
-	mu.Lock()
-	defer mu.Unlock()
+func joinRoom(w http.ResponseWriter, r *http.Request, gameService *service.GameService) {
 
 	var request struct {
 		RoomID   string `json:"room_id"`
@@ -204,104 +92,81 @@ func joinRoom(w http.ResponseWriter, r *http.Request, roomManager *game.RoomMana
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		response := Response{
-			Success: false,
-			Message: "Invalid request",
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
-	player, err := playerManager.GetPlayer(request.PlayerID)
+	res, err := gameService.JoinRoomWithContext(r.Context(), request.RoomID, request.PlayerID, request.GameType)
 	if err != nil {
-		response := Response{
-			Success: false,
-			Message: "Player not found",
-		}
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(response)
+		writeErrorResponse(w, joinRoomStatus(err), err.Error())
 		return
 	}
 
-	player.LastActive = time.Now()
-
-	room, err := roomManager.GetRoomByID(request.RoomID)
-	if err != nil {
-		response := Response{
-			Success: false,
-			Message: "Room not found",
-		}
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	if room.GameState.GameType != request.GameType {
-		response := Response{
-			Success: false,
-			Message: "Game type not match",
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	res, err := roomManager.JoinRoom(room.RoomID, player)
-	if err != nil {
-		response := Response{
-			Success: false,
-			Message: err.Error(),
-		}
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	response := Response{
-		Success: true,
-		Message: "Player joined room successfully",
-		Data:    res,
-	}
-
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	writeSuccessResponse(w, http.StatusOK, dto.FromJoinRoomResponse(res))
 }
 
-func addPlayer(w http.ResponseWriter, r *http.Request, playerManager *game.PlayerManager) {
-	mu.Lock()
-	defer mu.Unlock()
+func addPlayer(w http.ResponseWriter, r *http.Request, gameService *service.GameService) {
 
 	var request struct {
 		PlayerID string `json:"player_id"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		response := Response{
-			Success: false,
-			Message: "Invalid request",
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
-	player, err := playerManager.AddPlayer(request.PlayerID)
+	player, err := gameService.AddPlayer(request.PlayerID)
 	if err != nil {
-		response := Response{
-			Success: false,
-			Message: err.Error(),
-		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
+		writeErrorResponse(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	response := Response{
+	writeSuccessResponse(w, http.StatusCreated, dto.FromPlayerSnapshot(player))
+}
+
+func writeSuccessResponse(w http.ResponseWriter, statusCode int, data interface{}) {
+	writeJSONResponse(w, statusCode, Response{
 		Success: true,
-		Message: "Success registering player",
-		Data:    player,
+		Data:    data,
+		Error:   nil,
+	})
+}
+
+func writeErrorResponse(w http.ResponseWriter, statusCode int, message string) {
+	writeJSONResponse(w, statusCode, Response{
+		Success: false,
+		Data:    map[string]interface{}{},
+		Error:   &message,
+	})
+}
+
+func writeJSONResponse(w http.ResponseWriter, statusCode int, response Response) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func createRoomStatus(err error) int {
+	switch err {
+	case service.ErrPlayerNotFound:
+		return http.StatusNotFound
+	case service.ErrGameTypeRequired:
+		return http.StatusBadRequest
+	default:
+		return http.StatusBadRequest
 	}
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+}
+
+func joinRoomStatus(err error) int {
+	switch err {
+	case service.ErrGameTypeMismatch:
+		return http.StatusBadRequest
+	case service.ErrPlayerNotFound:
+		return http.StatusNotFound
+	case game.ErrInvalidGameState:
+		return http.StatusBadRequest
+	default:
+		return http.StatusNotFound
+	}
 }

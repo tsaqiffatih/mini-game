@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/handlers"
@@ -12,15 +14,21 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/tsaqiffatih/mini-game/api"
 	"github.com/tsaqiffatih/mini-game/game"
+	"github.com/tsaqiffatih/mini-game/infrastructure"
+	"github.com/tsaqiffatih/mini-game/internal/observability"
 	"github.com/tsaqiffatih/mini-game/middleware"
+	"github.com/tsaqiffatih/mini-game/service"
 )
 
 func main() {
+	observability.Init("mini-game")
+	logger := observability.Logger()
 
 	if _, err := os.Stat(".env"); err == nil {
 		err := godotenv.Load()
 		if err != nil {
-			log.Fatalf("Error loading .env file")
+			logger.Error("failed to load env file", "event_type", "startup", "error", err)
+			os.Exit(1)
 		}
 	}
 
@@ -30,7 +38,18 @@ func main() {
 	}
 
 	playerManager := game.NewPlayerManager()
-	roomManager := game.NewRoomManager()
+	roomRepository := infrastructure.NewMemoryRoomRepository()
+	gameService := service.NewGameService(roomRepository, playerManager)
+	clients := api.NewClientRegistry()
+	gameService.SetRoomNotifier(func(snapshot game.RoomSnapshot) {
+		api.NotifyGameUpdateToClients(clients, snapshot)
+	})
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	gameService.SetContext(ctx)
+
+	middleware.StartRateLimiterCleanup(ctx)
 
 	r := mux.NewRouter()
 
@@ -44,7 +63,11 @@ func main() {
 		json.NewEncoder(w).Encode(response)
 	})
 
-	api.RegisterRouter(r, roomManager, playerManager)
+	api.RegisterRouter(
+		r,
+		clients,
+		gameService,
+	)
 
 	corsHandler := handlers.CORS(
 		middleware.CORSAllowedHeaders(),
@@ -55,13 +78,37 @@ func main() {
 	tickerInterval := 30 * time.Minute
 	duration := 24 * time.Hour
 
-	go playerManager.RemoveInactivePlayers(duration, tickerInterval)
-	go roomManager.RemoveInactivePlayersFromRoom(duration, tickerInterval)
+	go playerManager.RemoveInactivePlayers(ctx, duration, tickerInterval)
+	go gameService.StartRoomCleanup(ctx, duration, tickerInterval)
 
+	r.Use(observability.RequestMiddleware)
 	r.Use(middleware.RateLimiter)
 
-	log.Println("Server running on http://localhost:8080")
-	if err := http.ListenAndServe(":"+port, corsHandler(r)); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	server := &http.Server{
+		Addr:              ":" + port,
+		Handler:           corsHandler(r),
+		ReadHeaderTimeout: 5 * time.Second,
 	}
+
+	go func() {
+		logger.Info("server starting", "event_type", "startup", "port", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("server failed", "event_type", "startup", "error", err)
+			stop()
+		}
+	}()
+
+	<-ctx.Done()
+	logger.Info("shutdown signal received", "event_type", "shutdown")
+
+	clients.CloseAll()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		logger.Error("server shutdown failed", "event_type", "shutdown", "error", err)
+	}
+	if err := gameService.CleanupRooms(shutdownCtx, 0); err != nil {
+		logger.Warn("room cleanup failed during shutdown", "event_type", "shutdown", "error", err)
+	}
+	logger.Info("shutdown complete", "event_type", "shutdown")
 }

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"sync"
 	"time"
@@ -37,9 +38,16 @@ func getClient(ip string) *rate.Limiter {
 
 // cleanupClients removes stale clients that haven't been seen for a while.
 // It runs periodically to free up memory.
-func cleanupClients() {
+func cleanupClients(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
 	for {
-		time.Sleep(time.Minute)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 
 		var staleClients []string
 
@@ -61,10 +69,13 @@ func cleanupClients() {
 	}
 }
 
+func StartRateLimiterCleanup(ctx context.Context) {
+	go cleanupClients(ctx)
+}
+
 // RateLimiter is a middleware that limits the rate of incoming requests.
 // It uses the rate limiter to reject excessive requests.
 func RateLimiter(next http.Handler) http.Handler {
-	go cleanupClients()
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr
