@@ -6,4 +6,5 @@ note.md
 .github
 bin/
 .tmp
-stockfish/
+stockfish/*
+!stockfish/.gitkeep
