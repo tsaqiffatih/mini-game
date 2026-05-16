@@ -307,6 +307,30 @@ func TestGameService_RemovePlayerAfterDelay_PlayerDisconnected_RemovesPlayer(t *
 	}
 }
 
+func TestGameService_RemovePlayerAfterDelayForGeneration_StaleGenerationSkipsRemoval(t *testing.T) {
+	service, _ := newGameServiceForTest()
+	addServicePlayerForTest(t, service, "p1")
+	addServicePlayerForTest(t, service, "p2")
+	roomID := createTicTacToeRoomForServiceTest(t, service, "p1")
+	if _, err := service.JoinRoom(roomID, "p2", "tictactoe"); err != nil {
+		t.Fatalf("JoinRoom() error = %v", err)
+	}
+
+	service.RemovePlayerAfterDelayForGeneration(roomID, "p2", 1, time.Millisecond, func(_ string, generation uint64) bool {
+		return generation == 2
+	})
+
+	time.Sleep(20 * time.Millisecond)
+
+	snapshot, err := service.RoomSnapshot(roomID)
+	if err != nil {
+		t.Fatalf("RoomSnapshot() error = %v", err)
+	}
+	if len(snapshot.Players) != 2 {
+		t.Fatalf("players = %d, want 2 after stale delayed removal", len(snapshot.Players))
+	}
+}
+
 func TestGameService_Stress_MultipleRooms_ConcurrentJoin(t *testing.T) {
 	service, _ := newGameServiceForTest()
 

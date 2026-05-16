@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -15,26 +17,36 @@ import (
 	"github.com/tsaqiffatih/mini-game/service"
 )
 
+type websocketReadResult struct {
+	CloseCode   int
+	CloseReason string
+}
+
 // message.go
 func readMessages(
 	ctx context.Context,
 	conn *websocket.Conn,
-	done chan struct{},
+	done chan<- websocketReadResult,
 	clients *ClientRegistry,
 	gameService *service.GameService,
 	roomID string,
 	player game.PlayerSnapshot,
 	client *Client,
 ) {
-
-	defer close(done)
+	result := websocketReadResult{CloseCode: websocket.CloseNormalClosure}
+	defer func() {
+		done <- result
+	}()
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			result = websocketReadCloseResult(err)
 			observability.Logger().InfoContext(ctx, "websocket read closed",
 				"room_id", roomID,
 				"player_id", player.ID,
 				"event_type", "websocket_read_closed",
+				"close_code", result.CloseCode,
+				"close_reason", result.CloseReason,
 				"error", err,
 			)
 			break
@@ -61,6 +73,27 @@ func readMessages(
 		gameService.UpdatePlayerActivityWithContext(ctx, roomID, player.ID)
 		handleMessageAction(ctx, clients, gameService, roomID, player, client, message)
 	}
+}
+
+func websocketReadCloseResult(err error) websocketReadResult {
+	result := websocketReadResult{
+		CloseCode: websocket.CloseAbnormalClosure,
+	}
+
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		result.CloseCode = closeErr.Code
+		result.CloseReason = closeErr.Text
+		return result
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		result.CloseReason = "timeout"
+		return result
+	}
+
+	return result
 }
 
 func handleMessageAction(

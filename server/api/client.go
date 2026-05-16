@@ -9,30 +9,42 @@ import (
 )
 
 type Client struct {
-	PlayerID string
-	Conn     *websocket.Conn
-	Send     chan []byte
-	done     chan struct{}
-	close    sync.Once
+	PlayerID   string
+	Generation uint64
+	Conn       *websocket.Conn
+	Send       chan []byte
+	done       chan struct{}
+	close      sync.Once
 }
 
 type ClientRegistry struct {
-	clients map[string]*Client
-	mu      sync.RWMutex
+	clients     map[string]*Client
+	generations map[string]uint64
+	mu          sync.RWMutex
 }
 
 func NewClientRegistry() *ClientRegistry {
 	return &ClientRegistry{
-		clients: make(map[string]*Client),
+		clients:     make(map[string]*Client),
+		generations: make(map[string]uint64),
 	}
 }
 
 func (r *ClientRegistry) Attach(playerID string, conn *websocket.Conn, pongWait time.Duration) *Client {
+	return r.AttachWithGeneration(playerID, 0, conn, pongWait)
+}
+
+func (r *ClientRegistry) AttachWithGeneration(playerID string, generation uint64, conn *websocket.Conn, pongWait time.Duration) *Client {
+	if generation == 0 {
+		generation = r.NextGeneration(playerID)
+	}
+
 	client := &Client{
-		PlayerID: playerID,
-		Conn:     conn,
-		Send:     make(chan []byte, 256),
-		done:     make(chan struct{}),
+		PlayerID:   playerID,
+		Generation: generation,
+		Conn:       conn,
+		Send:       make(chan []byte, 256),
+		done:       make(chan struct{}),
 	}
 
 	conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -41,14 +53,34 @@ func (r *ClientRegistry) Attach(playerID string, conn *websocket.Conn, pongWait 
 		return nil
 	})
 
+	var existing *Client
 	r.mu.Lock()
-	if existing := r.clients[playerID]; existing != nil {
-		existing.Close()
+	if generation > r.generations[playerID] {
+		r.generations[playerID] = generation
 	}
+	existing = r.clients[playerID]
 	r.clients[playerID] = client
 	r.mu.Unlock()
 
+	if existing != nil {
+		observability.Logger().Info("websocket duplicate connection replaced",
+			"room_id", "",
+			"player_id", playerID,
+			"event_type", "websocket_duplicate_replaced",
+			"close_code", CloseCodeDuplicateConnection,
+		)
+		existing.CloseWithCode(CloseCodeDuplicateConnection, "duplicate connection")
+	}
+
 	return client
+}
+
+func (r *ClientRegistry) NextGeneration(playerID string) uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.generations[playerID]++
+	return r.generations[playerID]
 }
 
 func (r *ClientRegistry) Get(playerID string) (*Client, bool) {
@@ -62,6 +94,16 @@ func (r *ClientRegistry) Get(playerID string) (*Client, bool) {
 func (r *ClientRegistry) IsConnected(playerID string) bool {
 	_, exists := r.Get(playerID)
 	return exists
+}
+
+func (r *ClientRegistry) IsCurrentDisconnectedGeneration(playerID string, generation uint64) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if _, exists := r.clients[playerID]; exists {
+		return false
+	}
+	return r.generations[playerID] == generation
 }
 
 func (r *ClientRegistry) Remove(playerID string) {
@@ -131,6 +173,13 @@ func (c *Client) Close() {
 		if c.Conn != nil {
 			_ = c.Conn.Close()
 		}
+	})
+}
+
+func (c *Client) CloseWithCode(code int, reason string) {
+	c.close.Do(func() {
+		close(c.done)
+		closeWebsocketWithCode(c.Conn, code, reason)
 	})
 }
 

@@ -3,9 +3,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/tsaqiffatih/mini-game/api/dto"
 	"github.com/tsaqiffatih/mini-game/game"
 	"github.com/tsaqiffatih/mini-game/infrastructure"
@@ -96,11 +101,117 @@ func TestProcessChessMove_InvalidPayloadSendsMoveRejected(t *testing.T) {
 	}
 }
 
+func TestHandleWebSocket_MissingRoomID_UpgradesThenClosesInvalidRoom(t *testing.T) {
+	gameService := service.NewGameService(infrastructure.NewMemoryRoomRepository(), game.NewPlayerManager())
+	server := newWebSocketTestServer(t, NewClientRegistry(), gameService)
+
+	conn := dialTestWebSocket(t, server, "player_id=p1")
+	defer conn.Close()
+
+	assertWebSocketCloseCode(t, conn, CloseCodeInvalidRoom)
+}
+
+func TestHandleWebSocket_PlayerNotFound_UpgradesThenClosesPlayerNotFound(t *testing.T) {
+	gameService := service.NewGameService(infrastructure.NewMemoryRoomRepository(), game.NewPlayerManager())
+	if _, err := gameService.AddPlayer("p1"); err != nil {
+		t.Fatalf("AddPlayer() error = %v", err)
+	}
+	res, err := gameService.CreateRoomWithContext(context.Background(), "tictactoe", "p1")
+	if err != nil {
+		t.Fatalf("CreateRoomWithContext() error = %v", err)
+	}
+	server := newWebSocketTestServer(t, NewClientRegistry(), gameService)
+
+	conn := dialTestWebSocket(t, server, "room_id="+res.Room.RoomID+"&player_id=missing")
+	defer conn.Close()
+
+	assertWebSocketCloseCode(t, conn, CloseCodePlayerNotFound)
+}
+
+func TestHandleWebSocket_DuplicateConnection_ReplacesExistingConnection(t *testing.T) {
+	gameService := service.NewGameService(infrastructure.NewMemoryRoomRepository(), game.NewPlayerManager())
+	if _, err := gameService.AddPlayer("p1"); err != nil {
+		t.Fatalf("AddPlayer() error = %v", err)
+	}
+	res, err := gameService.CreateRoomWithContext(context.Background(), "tictactoe", "p1")
+	if err != nil {
+		t.Fatalf("CreateRoomWithContext() error = %v", err)
+	}
+	clients := NewClientRegistry()
+	server := newWebSocketTestServer(t, clients, gameService)
+	query := "room_id=" + res.Room.RoomID + "&player_id=p1"
+
+	firstConn := dialTestWebSocket(t, server, query)
+	defer firstConn.Close()
+
+	secondConn := dialTestWebSocket(t, server, query)
+	defer secondConn.Close()
+
+	assertWebSocketCloseCode(t, firstConn, CloseCodeDuplicateConnection)
+	if !clients.IsConnected("p1") {
+		t.Fatalf("new duplicate connection should remain active")
+	}
+}
+
 func newBufferedTestClient(playerID string) *Client {
 	return &Client{
 		PlayerID: playerID,
 		Send:     make(chan []byte, 1),
 		done:     make(chan struct{}),
+	}
+}
+
+func newWebSocketTestServer(t *testing.T, clients *ClientRegistry, gameService *service.GameService) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		HandleWebSocket(w, r, clients, gameService)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func dialTestWebSocket(t *testing.T, server *httptest.Server, query string) *websocket.Conn {
+	t.Helper()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	if query != "" {
+		wsURL += "?" + query
+	}
+
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		status := 0
+		if response != nil {
+			status = response.StatusCode
+		}
+		t.Fatalf("websocket dial error = %v, status = %d", err, status)
+	}
+	return conn
+}
+
+func assertWebSocketCloseCode(t *testing.T, conn *websocket.Conn, expectedCode int) {
+	t.Helper()
+
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline() error = %v", err)
+	}
+
+	for {
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			continue
+		}
+
+		var closeErr *websocket.CloseError
+		if errors.As(err, &closeErr) {
+			if closeErr.Code != expectedCode {
+				t.Fatalf("close code = %d, want %d; reason=%q", closeErr.Code, expectedCode, closeErr.Text)
+			}
+			return
+		}
+
+		t.Fatalf("ReadMessage() error = %v, want websocket close code %d", err, expectedCode)
 	}
 }
 

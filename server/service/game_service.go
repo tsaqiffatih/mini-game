@@ -345,6 +345,20 @@ func (s *GameService) RemovePlayerAfterDelay(roomID string, playerID string, del
 }
 
 func (s *GameService) RemovePlayerAfterDelayWithContext(ctx context.Context, roomID string, playerID string, delay time.Duration, isConnected func(string) bool) {
+	s.removePlayerAfterDelayWithContext(ctx, roomID, playerID, 0, delay, func(playerID string, _ uint64) bool {
+		return !isConnected(playerID)
+	})
+}
+
+func (s *GameService) RemovePlayerAfterDelayForGeneration(roomID string, playerID string, generation uint64, delay time.Duration, isCurrentDisconnectedGeneration func(string, uint64) bool) {
+	s.RemovePlayerAfterDelayForGenerationWithContext(s.context(), roomID, playerID, generation, delay, isCurrentDisconnectedGeneration)
+}
+
+func (s *GameService) RemovePlayerAfterDelayForGenerationWithContext(ctx context.Context, roomID string, playerID string, generation uint64, delay time.Duration, isCurrentDisconnectedGeneration func(string, uint64) bool) {
+	s.removePlayerAfterDelayWithContext(ctx, roomID, playerID, generation, delay, isCurrentDisconnectedGeneration)
+}
+
+func (s *GameService) removePlayerAfterDelayWithContext(ctx context.Context, roomID string, playerID string, generation uint64, delay time.Duration, shouldRemove func(string, uint64) bool) {
 	go func() {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
@@ -355,7 +369,13 @@ func (s *GameService) RemovePlayerAfterDelayWithContext(ctx context.Context, roo
 		case <-timer.C:
 		}
 
-		if isConnected(playerID) {
+		if !shouldRemove(playerID, generation) {
+			observability.Logger().InfoContext(ctx, "delayed player removal skipped",
+				"room_id", roomID,
+				"player_id", playerID,
+				"event_type", "player_removal_skipped",
+				"generation", generation,
+			)
 			return
 		}
 
@@ -366,8 +386,22 @@ func (s *GameService) RemovePlayerAfterDelayWithContext(ctx context.Context, roo
 
 		shouldRemoveRoom := room.HandlePlayerDisconnected(playerID)
 		if shouldRemoveRoom {
+			observability.Logger().InfoContext(ctx, "room removed after player disconnect",
+				"room_id", roomID,
+				"player_id", playerID,
+				"event_type", "room_removed",
+				"generation", generation,
+			)
 			_ = s.rooms.Delete(ctx, roomID)
+			return
 		}
+
+		observability.Logger().InfoContext(ctx, "player removed after disconnect grace period",
+			"room_id", roomID,
+			"player_id", playerID,
+			"event_type", "player_removed",
+			"generation", generation,
+		)
 	}()
 }
 
@@ -418,6 +452,11 @@ func (s *GameService) CleanupRooms(ctx context.Context, inactiveFor time.Duratio
 		room.RemoveInactivePlayers(now, inactiveFor)
 		if room.IsEmpty() || roomInactive(room, now, inactiveFor) {
 			room.Close()
+			observability.Logger().InfoContext(ctx, "room cleanup removed room",
+				"room_id", room.RoomID,
+				"player_id", "",
+				"event_type", "room_cleanup_removed",
+			)
 			if err := s.rooms.Delete(ctx, room.RoomID); err != nil {
 				return err
 			}
