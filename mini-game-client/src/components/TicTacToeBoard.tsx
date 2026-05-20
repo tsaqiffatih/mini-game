@@ -47,10 +47,15 @@ export default function TicTacToeBoard({
   const [playerMarkState, setPlayerMarkState] = useState<string>(playerMark);
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
+  const [opponentReconnecting, setOpponentReconnecting] = useState(false);
 
   const router = useRouter();
 
-  const { sendMessage, lastMessage } = useGameWebSocket(roomId, playerId);
+  const { sendMessage, lastMessage, isReconnecting } = useGameWebSocket(
+    "tictactoe",
+    roomId,
+    playerId,
+  );
 
   const lastMessageRef = useRef<string | null>(null); // untuk melacak pesan terakhir
   const isChatOpenRef = useRef(false);
@@ -83,9 +88,6 @@ export default function TicTacToeBoard({
         case "game_update": {
           const state = msg.payload?.room ?? msg.payload;
 
-          console.log(state);
-          
-
           if (!state) break;
 
           setRoomState(state.state);
@@ -105,7 +107,6 @@ export default function TicTacToeBoard({
           const joinedPlayerId = msg.payload?.data?.player?.player_id;
 
           if (playerId !== joinedPlayerId) {
-            console.log(msg);
             const state = msg.payload?.room ?? msg.payload;
             setRoomState(state.state);
 
@@ -119,10 +120,28 @@ export default function TicTacToeBoard({
 
           break;
 
+        case "player_reconnecting":
+          const reconnectingPlayerId = msg.payload?.data?.player?.player_id;
+
+          if (reconnectingPlayerId !== playerId) {
+            setOpponentReconnecting(true);
+          }
+          break;
+
+        case "player_reconnected":
+          const reconnectedPlayerId = msg.payload?.data?.player?.player_id;
+
+          if (reconnectedPlayerId !== playerId) {
+            setOpponentReconnecting(false);
+          }
+          break;
+
         case "player_left":
           const leftedPlayerId = msg.payload?.data?.player?.player_id;
 
           if (leftedPlayerId != playerId) {
+            setOpponentReconnecting(false);
+
             showAlert({
               title: "Player Lefted",
               text: "The other player has left the room.",
@@ -198,6 +217,11 @@ export default function TicTacToeBoard({
   }, [lastMessage, playerId, isChatOpen]);
 
   const handleCellClick = (row: number, col: number) => {
+    if (isReconnecting) {
+      showErrorAlert("Connection lost. Reconnecting...");
+      return;
+    }
+
     if (roomState != "PLAYING") {
       showErrorAlert("The game is not active yet!");
       return;
@@ -205,7 +229,7 @@ export default function TicTacToeBoard({
 
     if (turn !== playerMarkState) return;
 
-    if (board[row][col] !== "") return
+    if (board[row][col] !== "") return;
 
     sendMessage(
       JSON.stringify({
@@ -241,45 +265,24 @@ export default function TicTacToeBoard({
       {/* WAITING */}
       {roomState === "WAITING" && <Waiting roomId={roomId} />}
 
-      {/* FINISHED */}
-      {roomState === "FINISHED" && (
-        <div className="flex flex-col items-center justify-center">
-          {winner === "Draw" ? (
-            <h2 className="text-xl text-yellow-500">Game Draw!</h2>
-          ) : (
-            <h2 className="text-xl text-green-500">Winner: {winner}</h2>
-          )}
+      {/* OPPONENT RECONNECTING */}
+      {opponentReconnecting && !isReconnecting && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[998]">
+          <div className="alert alert-warning shadow-lg px-4 py-2">
+            <span className="loading loading-spinner loading-sm"></span>
+
+            <div className="flex flex-col">
+              <span className="font-semibold">Opponent reconnecting...</span>
+
+              <span className="text-xs opacity-70">
+                Waiting for opponent to reconnect
+              </span>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* RESETTING */}
-      {roomState === "RESETTING" && (
-        <div className="text-center">
-          <h2 className="text-lg">Resetting game...</h2>
-        </div>
-      )}
-
-      {/* {winner && winner !== "Draw" && (
-        <div className="flex h-full items-center justify-center">
-          <h2 className="text-2xl font-bold text-green-600">
-            Winner: {winner}
-          </h2>
-        </div>
-      )}
-
-      {winner === "Draw" && (
-        <div className="flex flex-col items-center justify-center space-y-4">
-          <h2 className="text-2xl font-bold text-yellow-600 text-center">
-            Game ended in a Draw!
-          </h2>
-          <p className="text-lg text-center">
-            No more moves available, and no player has won.
-          </p>
-          <p className="text-lg text-center">Wait Until the game Restart</p>
-        </div>
-      )} */}
-
-      {roomState === "PLAYING" && (
+      {roomState !== "WAITING" && (
         <div className="flex flex-col md:flex-row overflow-hidden p-2 items-center justify-center space-x-0 md:space-x-10">
           <div className="flex p-5">
             <div className="flex flex-col items-center justify-center space-y-4">
@@ -318,6 +321,46 @@ export default function TicTacToeBoard({
         </div>
       )}
 
+      {/* FINISHED MODAL */}
+      {roomState === "FINISHED" && (
+        <div className="fixed inset-0 z-[997] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-base-100 rounded-2xl p-8 shadow-2xl flex flex-col items-center space-y-4">
+            {winner === "Draw" ? (
+              <>
+                <h2 className="text-3xl font-bold text-yellow-500">
+                  Game Draw!
+                </h2>
+
+                <p className="opacity-70 text-center">Nobody wins this round</p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-3xl font-bold text-green-500">
+                  Winner: {winner}
+                </h2>
+
+                <p className="opacity-70 text-center">The match has finished</p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* RESETTING MODAL */}
+      {roomState === "RESETTING" && (
+        <div className="fixed inset-0 z-[997] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-base-100 rounded-2xl p-8 shadow-2xl flex flex-col items-center space-y-4">
+            <span className="loading loading-spinner loading-lg"></span>
+
+            <div className="text-center">
+              <h2 className="text-2xl font-bold">Resetting Game...</h2>
+
+              <p className="text-sm opacity-70">Preparing next round</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isChatOpen && (
         <div className="fixed md:hidden inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
           <div className="bg-base-100 py-0 rounded-lg w-11/12">
@@ -327,6 +370,22 @@ export default function TicTacToeBoard({
               messages={chatMessages}
               onSendMessage={handleSendMessage}
             />
+          </div>
+        </div>
+      )}
+
+      {/* RECONNECTING MODAL */}
+      {isReconnecting && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70">
+          <div className="bg-transparent rounded-xl p-6 shadow-xl flex flex-col items-center space-y-4">
+            <span className="loading loading-spinner loading-lg"></span>
+
+            <div className="text-center">
+              <h2 className="text-xl font-bold">Reconnecting...</h2>
+              <p className="text-sm opacity-70">
+                Trying to reconnect to the game server
+              </p>
+            </div>
           </div>
         </div>
       )}

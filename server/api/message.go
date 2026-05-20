@@ -132,12 +132,14 @@ func handleMessageAction(
 	}
 }
 
-func notifyRoomOnConnection(ctx context.Context, clients *ClientRegistry, gameService *service.GameService, roomID string, player game.PlayerSnapshot) {
-	NotifyToClientsInRoom(clients, gameService, roomID, EventPlayerJoined, EventPayload{
-		Message:   fmt.Sprintf("Player %s connected to room %s", player.ID, roomID),
-		Player:    playerEventDTO(player),
-		Timestamp: time.Now(),
-	})
+func notifyRoomOnConnection(ctx context.Context, clients *ClientRegistry, gameService *service.GameService, roomID string, player game.PlayerSnapshot, eventType string) {
+	if eventType != "" {
+		NotifyToClientsInRoom(clients, gameService, roomID, eventType, EventPayload{
+			Message:   connectionEventMessage(eventType, player.ID, roomID),
+			Player:    playerEventDTO(player),
+			Timestamp: time.Now(),
+		})
+	}
 
 	snapshot, err := gameService.RoomSnapshotWithContext(ctx, roomID)
 	if err != nil {
@@ -152,6 +154,15 @@ func notifyRoomOnConnection(ctx context.Context, clients *ClientRegistry, gameSe
 
 	sendRoomSnapshotToClient(clientForPlayer(clients, player.ID), snapshot)
 	sendChatHistoryToClient(ctx, clients, gameService, roomID, player.ID)
+}
+
+func connectionEventMessage(eventType string, playerID string, roomID string) string {
+	switch eventType {
+	case EventPlayerReconnected:
+		return fmt.Sprintf("Player %s reconnected to room %s", playerID, roomID)
+	default:
+		return fmt.Sprintf("Player %s connected to room %s", playerID, roomID)
+	}
 }
 
 func notifyChessClients(clients *ClientRegistry, gameService *service.GameService, roomID string, player game.PlayerSnapshot) {

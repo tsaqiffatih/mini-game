@@ -1,5 +1,6 @@
-import useWebSocket from "react-use-websocket";
+import useWebSocket, { ReadyState } from "react-use-websocket";
 import { showErrorAlert } from "@/utils/alerthelper";
+import { useEffect, useMemo, useState } from "react";
 
 const backendUrl = process.env.NEXT_PUBLIC_WS_BACKEND_URL;
 
@@ -10,60 +11,140 @@ const FATAL_CLOSE_CODES = new Set([
   4004, // player not found
 ]);
 
-export const useGameWebSocket = (roomId: string, playerId: string) => {
-  const { sendMessage, lastMessage } = useWebSocket(
+export const useGameWebSocket = (
+  gameType: string,
+  roomId: string,
+  playerId: string,
+) => {
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [hasReconnectStopped, setHasReconnectStopped] = useState(false);
+
+  const { sendMessage, lastMessage, readyState } = useWebSocket(
     `${backendUrl}/ws?room_id=${roomId}&player_id=${playerId}`,
     {
       onOpen: () => {
         if (process.env.NODE_ENV === "development") {
-          console.log("WebSocket connected");
+          console.log("✅ WebSocket connected");
         }
       },
+
       onError: (error) => {
         if (process.env.NODE_ENV === "development") {
-          console.log("WebSocket error: ", error);
+          console.log("❌ WebSocket error:", error);
         }
       },
+
       onClose: (event) => {
         if (process.env.NODE_ENV === "development") {
-          console.log("WebSocket closed:", event.code, event.reason);
+          console.log(
+            `🔌 WebSocket closed | code=${event.code} | reason=${event.reason}`,
+          );
         }
-        // fatal room/session errors only
+
+        // fatal errors → stop reconnect
         if (FATAL_CLOSE_CODES.has(event.code)) {
           showErrorAlert("Room expired or player session is no longer valid.");
+
           localStorage.removeItem("roomId");
           localStorage.removeItem("playerMark");
+
           setTimeout(() => {
             window.location.href = "/";
           }, 1000);
-          console.log("WebSocket closed:", event.code, event.reason);
         }
       },
 
       shouldReconnect: (closeEvent) => {
-        // stop reconnecting for fatal application errors
+        // fatal errors → do not reconnect
         if (FATAL_CLOSE_CODES.has(closeEvent.code)) {
+          setHasReconnectStopped(true);
           return false;
         }
 
         // normal close
         if (closeEvent.code === 1000) {
+          setHasReconnectStopped(true);
           return false;
         }
 
-        // reconnect for:
-        // - refresh disconnects
-        // - temporary network failures
-        // - abnormal closures
-        // - backend restarts/redeploys
         return true;
       },
 
       reconnectAttempts: 10,
-      reconnectInterval: (attemptNumber) =>
-        Math.min(attemptNumber * 1000, 10000),
+
+      reconnectInterval: (attemptNumber) => {
+        const delay = Math.min(attemptNumber * 1000, 10000);
+
+        if (process.env.NODE_ENV === "development") {
+          console.log(
+            `🔄 Reconnect attempt ${attemptNumber} in ${delay / 1000}s`,
+          );
+        }
+
+        return delay;
+      },
     },
   );
 
-  return { sendMessage, lastMessage };
+  // derived reconnect state
+  const isReconnecting = useMemo(() => {
+    if (hasReconnectStopped) return false;
+
+    return (
+      isOffline ||
+      readyState === ReadyState.CONNECTING ||
+      readyState === ReadyState.CLOSING ||
+      readyState === ReadyState.CLOSED
+    );
+  }, [readyState, isOffline, hasReconnectStopped]);
+
+  // readable status
+  const connectionStatus = useMemo(() => {
+    return {
+      [ReadyState.CONNECTING]: "CONNECTING",
+      [ReadyState.OPEN]: "OPEN",
+      [ReadyState.CLOSING]: "CLOSING",
+      [ReadyState.CLOSED]: "CLOSED",
+      [ReadyState.UNINSTANTIATED]: "UNINSTANTIATED",
+    }[readyState];
+  }, [readyState]);
+
+  useEffect(() => {
+    const handleOffline = () => {
+      console.log("📴 Browser offline");
+      setIsOffline(true);
+    };
+
+    const handleOnline = () => {
+      console.log("🌐 Browser online");
+      setIsOffline(false);
+    };
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, []);
+
+  // debug logger
+  useEffect(() => {
+    if (process.env.NODE_ENV === "development") {
+      console.log(`📡 WS STATUS: ${connectionStatus}`);
+    }
+  }, [connectionStatus]);
+
+  useEffect(() => {
+    console.log("READY STATE:", readyState);
+  }, [readyState]);
+
+  return {
+    sendMessage,
+    lastMessage,
+    readyState,
+    connectionStatus,
+    isReconnecting,
+  };
 };

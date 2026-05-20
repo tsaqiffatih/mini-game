@@ -3,6 +3,7 @@
 import ChessBoard from "@/components/ChessBoard";
 import Lobby from "@/components/Lobby";
 import { showAlert, showErrorAlert } from "@/utils/alerthelper";
+import { clearGameSession, getGameSession } from "@/utils/gameStorage";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -26,8 +27,11 @@ const ChessPage: React.FC = () => {
       return;
     }
 
-    setPlayerMark(localStorage.getItem("playerMark") || "");
-    setRoomId(localStorage.getItem("roomId") || "");
+    const session = getGameSession("chess");
+
+    setPlayerMark(session.playerMark || "");
+    setRoomId(session.roomId || "");
+
     setPlayerId(storedPlayerId);
   }, [router]);
 
@@ -46,14 +50,12 @@ const ChessPage: React.FC = () => {
               cancelButtonText: "No, stay",
             }).then((result) => {
               if (result.isConfirmed) {
-                localStorage.removeItem("roomId");
-                localStorage.removeItem("playerMark");
+                clearGameSession("chess")
                 router.push("/");
               }
             });
           } else {
-            localStorage.removeItem("roomId");
-            localStorage.removeItem("playerMark");
+            clearGameSession("chess")
             router.push("/");
           }
         }}

@@ -6,9 +6,11 @@ import axios from "axios";
 import { showErrorAlert } from "@/utils/alerthelper";
 import { useRouter } from "next/navigation";
 import AIDifficultyModal from "./AIDifficultyModal";
+import { saveGameSession } from "@/utils/gameStorage";
 
+type GameType = "chess" | "tictactoe";
 interface LobbyProps {
-  gameType: string;
+  gameType: GameType;
   playerId: string;
   onRoomReady: (roomId: string, playerMark: string) => void;
 }
@@ -46,9 +48,12 @@ export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
         throw new Error("roomId missing");
       }
 
-      localStorage.setItem("roomId", newRoomId);
-      localStorage.setItem("playerMark", playerMark);
-      localStorage.setItem("aiLevel", String(aiLevel));
+      saveGameSession({
+        gameType,
+        roomId: newRoomId,
+        playerMark,
+        aiLevel,
+      });
 
       setIsAIModalOpen(false);
       onRoomReady(newRoomId, playerMark);
@@ -75,8 +80,11 @@ export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
         throw new Error("roomId missing");
       }
 
-      localStorage.setItem("roomId", newRoomId);
-      localStorage.setItem("playerMark", playerMark);
+      saveGameSession({
+        gameType,
+        roomId: newRoomId,
+        playerMark,
+      });
 
       onRoomReady(newRoomId, playerMark);
     } catch (error: any) {
@@ -101,8 +109,11 @@ export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
       const newRoomId = data?.data?.room?.room_id;
       const playerMark = data?.data?.player_mark;
 
-      localStorage.setItem("roomId", roomId);
-      localStorage.setItem("playerMark", playerMark);
+      saveGameSession({
+        gameType,
+        roomId: newRoomId,
+        playerMark,
+      });
 
       onRoomReady(newRoomId, playerMark);
     } catch (error: any) {

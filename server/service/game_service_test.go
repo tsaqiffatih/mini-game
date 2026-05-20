@@ -331,6 +331,37 @@ func TestGameService_RemovePlayerAfterDelayForGeneration_StaleGenerationSkipsRem
 	}
 }
 
+func TestGameService_RemovePlayerAfterDelayForGeneration_CallsCallbackAfterRemoval(t *testing.T) {
+	service, _ := newGameServiceForTest()
+	addServicePlayerForTest(t, service, "p1")
+	addServicePlayerForTest(t, service, "p2")
+	roomID := createTicTacToeRoomForServiceTest(t, service, "p1")
+	if _, err := service.JoinRoom(roomID, "p2", "tictactoe"); err != nil {
+		t.Fatalf("JoinRoom() error = %v", err)
+	}
+
+	removed := make(chan struct{}, 1)
+	service.RemovePlayerAfterDelayForGenerationWithCallback(roomID, "p2", 1, time.Millisecond, func(_ string, generation uint64) bool {
+		return generation == 1
+	}, func() {
+		removed <- struct{}{}
+	})
+
+	select {
+	case <-removed:
+	case <-time.After(time.Second):
+		t.Fatalf("removal callback was not called")
+	}
+
+	snapshot, err := service.RoomSnapshot(roomID)
+	if err != nil {
+		t.Fatalf("RoomSnapshot() error = %v", err)
+	}
+	if len(snapshot.Players) != 1 || snapshot.Players[0].ID != "p1" {
+		t.Fatalf("players = %#v, want only p1 after delayed removal", snapshot.Players)
+	}
+}
+
 func TestGameService_Stress_MultipleRooms_ConcurrentJoin(t *testing.T) {
 	service, _ := newGameServiceForTest()
 

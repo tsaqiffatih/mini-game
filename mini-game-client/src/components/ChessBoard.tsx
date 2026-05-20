@@ -72,7 +72,11 @@ export type CapturedPiece = {
 
 export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
   const router = useRouter();
-  const { sendMessage, lastMessage } = useGameWebSocket(roomId, playerId);
+  const { sendMessage, lastMessage, isReconnecting } = useGameWebSocket(
+    "chess",
+    roomId,
+    playerId,
+  );
 
   const {
     playMoveSelf,
@@ -112,6 +116,8 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [hasNewMessage, setHasNewMessage] = useState(false);
+
+  const [opponentReconnecting, setOpponentReconnecting] = useState(false);
 
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
 
@@ -241,10 +247,28 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
 
         break;
 
+      case "player_reconnecting":
+        const reconnectingPlayerId = msg.payload?.data?.player?.player_id;
+
+        if (reconnectingPlayerId !== playerId) {
+          setOpponentReconnecting(true);
+        }
+        break;
+
+      case "player_reconnected":
+        const reconnectedPlayerId = msg.payload?.data?.player?.player_id;
+
+        if (reconnectedPlayerId !== playerId) {
+          setOpponentReconnecting(false);
+        }
+        break;
+
       case "player_left":
         const leftPlayerId = msg.payload?.data?.player?.player_id;
 
         if (leftPlayerId && leftPlayerId !== playerId) {
+          setOpponentReconnecting(false);
+
           showAlert({
             title: "Player Left",
             text: `${leftPlayerId} left the room.`,
@@ -303,6 +327,11 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
    * ========================= */
   const sendMove = useCallback(
     (from: Square, to: Square, promotion?: string): boolean => {
+      if (opponentReconnecting) {
+        showErrorAlert("Opponent reconnecting...");
+        return false;
+      }
+
       if (roomState !== "PLAYING") {
         showErrorAlert("Game is not active");
         return false;
@@ -327,7 +356,7 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
 
       return true;
     },
-    [sendMessage, roomState, turn, playerMark],
+    [sendMessage, roomState, turn, playerMark, opponentReconnecting],
   );
 
   const handleMove = useCallback(
@@ -512,7 +541,10 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
 
       movable: {
         free: false,
-        color: roomState === "PLAYING" ? playerMark : undefined,
+        color:
+          roomState === "PLAYING" && !opponentReconnecting
+            ? playerMark
+            : undefined,
         dests: legalDests,
         showDests: true,
         rookCastle: true,
@@ -555,6 +587,7 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
     playerMark,
     roomState,
     turn,
+    opponentReconnecting,
   ]);
 
   const whiteScore = useMemo(() => {
@@ -579,44 +612,9 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
     return <Waiting roomId={roomId} />;
   }
 
-  /** =========================
-   * FINISHED
-   * ========================= */
-  if (roomState === "FINISHED") {
-    return (
-      <div className="flex flex-col items-center justify-center gap-4 min-h-dvh">
-        <div className="text-center">
-          {winner.toLowerCase() === "draw" ? (
-            <h2 className="text-2xl font-bold text-yellow-500">Draw Game</h2>
-          ) : (
-            <h2 className="text-2xl font-bold text-green-500">
-              Winner: {winner}
-            </h2>
-          )}
-
-          <p className="mt-2 text-sm opacity-70">
-            Waiting for automatic reset...
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  /** =========================
-   * RESETTING
-   * ========================= */
-  if (roomState === "RESETTING") {
-    return (
-      <div className="flex flex-col items-center justify-center gap-4 min-h-dvh">
-        <div className="text-center">
-          <h2 className="text-xl font-bold">Resetting Game...</h2>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="w-full flex flex-col gap-4 items-center justify-start pb-2 lg:pb-0 pt-16 lg:pt-2 overflow-x-hidden lg:overflow-hidden lg:h-screen">
+      {/* HEADER */}
       <div className="text-center space-y-1">
         <h2 className="text-xl lg:text-2xl font-bold">Chess Match</h2>
 
@@ -636,16 +634,20 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
           <span>Room: &quot;{roomId}&quot;</span>
         </div>
       </div>
-      <div className="flex flex-col lg:flex-row gap-4 items-center lg:items-start justify-center">
+
+      {/* MAIN LAYOUT */}
+      <div className="flex flex-col min-[960px]:flex-row gap-4 items-center lg:items-start justify-center w-full">
+        {/* DESKTOP MOVE HISTORY */}
         <ChessMoveHistory
           pgnMoves={pgnMoves}
-          containerClassName="hidden lg:block max-h-[600px] lg:h-[600px]"
+          containerClassName="hidden min-[960px]:block max-h-[600px] lg:h-[600px]"
           scrollClassName="max-h-[600px] w-52 lg:h-[540px]"
         />
 
-        <div className="aspect-square w-[98vw] lg:w-[60vw] max-w-[600px] lg:max-w-[520px]">
+        {/* BOARD SECTION */}
+        <div className="aspect-square w-[98vw] sm:w-[92vw] md:w-[80vw] lg:w-[58vw] xl:w-[520px] max-w-[900px]">
           {/* TOP PLAYER */}
-          <div className="flex items-center justify-between lg:px-2 lg:py-2 bg-base-200 rounded-t-sm border-b">
+          <div className="flex items-center justify-between px-2 py-2 bg-base-200 rounded-t-sm border-b">
             <div className="flex items-center gap-2">
               {/* AVATAR */}
               <div className="w-10 h-10 rounded overflow-hidden bg-base-300 flex items-center justify-center">
@@ -684,15 +686,29 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
                 </div>
               </div>
             </div>
+            {/* CONNECTION STATUS */}
+            <div className="flex items-center gap-2">
+              <div
+                className={`w-2 h-2 rounded-full transition-all duration-300
+                  ${
+                    opponentReconnecting
+                      ? "bg-warning animate-pulse"
+                      : "bg-success"
+                  }`}
+              />
 
-            {/* TIMER */}
-            <div className="bg-base-300 px-3 py-1 rounded text-sm lg:text-base font-bold">
-              10:00
+              <span
+                className={`text-xs lg:text-sm font-medium transition-colors${
+                  opponentReconnecting ? "text-warning" : "text-success"
+                }`}
+              >
+                {opponentReconnecting ? "Reconnecting..." : "Online"}
+              </span>
             </div>
           </div>
 
           {/* BOARD */}
-          <div className="aspect-square w-full max-w-[600px]">
+          <div className="aspect-square w-full">
             <div ref={boardContainerRef} className="cg-wrap w-full h-full" />
           </div>
 
@@ -735,16 +751,11 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
                 </div>
               </div>
             </div>
-
-            {/* TIMER */}
-            <div className="bg-base-300 px-3 py-1 rounded text-sm lg:text-base font-bold">
-              09:42
-            </div>
           </div>
         </div>
 
         {/* DESKTOP CHAT */}
-        <div className="hidden lg:block w-72">
+        <div className="hidden min-[960px]:block w-72">
           <ChatOpened
             setOpenChatOpened={() => setIsChatOpen(false)}
             userName={playerId}
@@ -753,8 +764,8 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
           />
         </div>
 
-        {/* MOBILE CHAT BUTTON */}
-        <div className="lg:hidden relative">
+        {/* MOBILE/TABLET CHAT BUTTON */}
+        <div className="min-[960px]:hidden relative">
           <button
             className="btn btn-outline"
             onClick={() => {
@@ -769,17 +780,17 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
           </button>
         </div>
 
-        {/* MOBILE MOVE HISTORY */}
+        {/* MOBILE/TABLET MOVE HISTORY */}
         <ChessMoveHistory
           pgnMoves={pgnMoves}
-          containerClassName="lg:hidden max-h-[600px]"
-          scrollClassName="max-h-[400px] w-80"
+          containerClassName="min-[960px]:hidden max-h-[600px]"
+          scrollClassName="max-h-[400px] w-[92vw] w-[98vw] sm:w-[92vw] md:w-[80vw] lg:w-[58vw] h-[400px]"
         />
 
-        {/* MOBILE CHAT MODAL */}
+        {/* MOBILE/TABLET CHAT MODAL */}
         {isChatOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
-            <div className="bg-base-100 rounded-lg w-11/12">
+            <div className="bg-base-100 rounded-lg w-11/12 md:w-[700px]">
               <ChatOpened
                 userName={playerId}
                 messages={chatMessages}
@@ -790,6 +801,65 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
           </div>
         )}
       </div>
+      {/* RECONNECTING MODAL */}
+      {isReconnecting && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70">
+          <div className="bg-transparent rounded-xl p-6 shadow-xl flex flex-col items-center space-y-4">
+            <span className="loading loading-spinner loading-lg"></span>
+
+            <div className="text-center">
+              <h2 className="text-xl font-bold">Reconnecting...</h2>
+              <p className="text-sm opacity-70">
+                Trying to reconnect to the game server
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FINISHED MODAL */}
+      {roomState === "FINISHED" && (
+        <div className="fixed inset-0 z-[997] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-base-100 rounded-2xl p-8 shadow-2xl flex flex-col items-center space-y-4">
+            {winner.toLowerCase() === "draw" ? (
+              <>
+                <h2 className="text-3xl font-bold text-yellow-500">
+                  Draw Game
+                </h2>
+
+                <p className="text-sm opacity-70 text-center">
+                  Nobody wins this match
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-3xl font-bold text-green-500">
+                  Winner: {winner}
+                </h2>
+
+                <p className="text-sm opacity-70 text-center">
+                  Waiting for automatic reset...
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* RESETTING MODAL */}
+      {roomState === "RESETTING" && (
+        <div className="fixed inset-0 z-[997] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-base-100 rounded-2xl p-8 shadow-2xl flex flex-col items-center space-y-4">
+            <span className="loading loading-spinner loading-lg"></span>
+
+            <div className="text-center">
+              <h2 className="text-2xl font-bold">Resetting Game...</h2>
+
+              <p className="text-sm opacity-70">Preparing next round</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

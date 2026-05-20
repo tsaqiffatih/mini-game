@@ -3,6 +3,7 @@
 import Lobby from "@/components/Lobby";
 import TicTacToeBoard from "@/components/TicTacToeBoard";
 import { showAlert, showErrorAlert } from "@/utils/alerthelper";
+import { clearGameSession, getGameSession } from "@/utils/gameStorage";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -26,8 +27,10 @@ const TicTacToePage: React.FC = () => {
       return;
     }
 
-    setPlayerMark(localStorage.getItem("playerMark") || "");
-    setRoomId(localStorage.getItem("roomId") || "");
+    const session = getGameSession("tictactoe");
+
+    setPlayerMark(session.playerMark || "");
+    setRoomId(session.roomId || "");
     setPlayerId(storedPlayerId);
   }, [router]);
 
@@ -46,14 +49,12 @@ const TicTacToePage: React.FC = () => {
               cancelButtonText: "No, stay",
             }).then((result) => {
               if (result.isConfirmed) {
-                localStorage.removeItem("roomId");
-                localStorage.removeItem("playerMark");
+                clearGameSession("tictactoe")
                 router.push("/");
               }
             });
           } else {
-            localStorage.removeItem("roomId");
-            localStorage.removeItem("playerMark");
+            clearGameSession("tictactoe")
             router.push("/");
           }
         }}

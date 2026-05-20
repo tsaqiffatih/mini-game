@@ -47,16 +47,18 @@ var upgrader = websocket.Upgrader{
 }
 
 const (
-	EventRoomUpdate   = "room_update"
-	EventGameUpdate   = "game_update"
-	EventPlayerJoined = "player_joined"
-	EventPlayerLeft   = "player_left"
-	EventChatMessage  = "chat_message"
-	EventChatHistory  = "chat_history"
+	EventRoomUpdate         = "room_update"
+	EventGameUpdate         = "game_update"
+	EventPlayerJoined       = "player_joined"
+	EventPlayerReconnecting = "player_reconnecting"
+	EventPlayerReconnected  = "player_reconnected"
+	EventPlayerLeft         = "player_left"
+	EventChatMessage        = "chat_message"
+	EventChatHistory        = "chat_history"
 
 	writeWait  = 10 * time.Second
-	pingPeriod = 30 * time.Second
-	pongWait   = 60 * time.Second
+	pingPeriod = 5 * time.Second
+	pongWait   = 10 * time.Second
 )
 
 const (
@@ -124,6 +126,8 @@ func HandleWebSocket(
 	}
 
 	generation := clients.NextGeneration(playerID)
+	wasConnected := clients.IsConnected(playerID)
+	wasDisconnected := player.Session == game.PlayerSessionDisconnected
 	if err := gameService.MarkPlayerConnectedWithContext(ctx, roomID, playerID); err != nil {
 		spanErr = err
 		code, reason := websocketCloseForValidationError(err)
@@ -150,7 +154,7 @@ func HandleWebSocket(
 		"generation", client.Generation,
 	)
 
-	notifyRoomOnConnection(ctx, clients, gameService, roomID, player)
+	notifyRoomOnConnection(ctx, clients, gameService, roomID, player, connectionEventType(wasConnected, wasDisconnected))
 
 	done := make(chan websocketReadResult, 1)
 
@@ -209,8 +213,8 @@ func handlePlayerDisconnection(ctx context.Context, clients *ClientRegistry, gam
 	}
 	_ = gameService.MarkPlayerDisconnectedWithContext(ctx, roomID, playerID)
 
-	NotifyToClientsInRoom(clients, gameService, roomID, EventPlayerLeft, EventPayload{
-		Message:   fmt.Sprintf("Player %s left the room", playerID),
+	NotifyToClientsInRoom(clients, gameService, roomID, EventPlayerReconnecting, EventPayload{
+		Message:   fmt.Sprintf("Player %s disconnected temporarily", playerID),
 		Player:    playerEventDTO(player),
 		Timestamp: time.Now(),
 	})
@@ -222,7 +226,23 @@ func handlePlayerDisconnection(ctx context.Context, clients *ClientRegistry, gam
 		"delay", 30*time.Second,
 		"generation", client.Generation,
 	)
-	gameService.RemovePlayerAfterDelayForGeneration(roomID, playerID, client.Generation, 30*time.Second, clients.IsCurrentDisconnectedGeneration)
+	gameService.RemovePlayerAfterDelayForGenerationWithCallback(roomID, playerID, client.Generation, 30*time.Second, clients.IsCurrentDisconnectedGeneration, func() {
+		NotifyToClientsInRoom(clients, gameService, roomID, EventPlayerLeft, EventPayload{
+			Message:   fmt.Sprintf("Player %s left the room", playerID),
+			Player:    playerEventDTO(player),
+			Timestamp: time.Now(),
+		})
+	})
+}
+
+func connectionEventType(wasConnected bool, wasDisconnected bool) string {
+	if wasConnected {
+		return ""
+	}
+	if wasDisconnected {
+		return EventPlayerReconnected
+	}
+	return EventPlayerJoined
 }
 
 func playerEventDTO(player game.PlayerSnapshot) *dto.PlayerDTO {

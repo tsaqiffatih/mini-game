@@ -153,6 +153,67 @@ func TestHandleWebSocket_DuplicateConnection_ReplacesExistingConnection(t *testi
 	}
 }
 
+func TestHandlePlayerDisconnection_BroadcastsReconnectingNotLeft(t *testing.T) {
+	gameService := service.NewGameService(infrastructure.NewMemoryRoomRepository(), game.NewPlayerManager())
+	if _, err := gameService.AddPlayer("p1"); err != nil {
+		t.Fatalf("AddPlayer(p1) error = %v", err)
+	}
+	if _, err := gameService.AddPlayer("p2"); err != nil {
+		t.Fatalf("AddPlayer(p2) error = %v", err)
+	}
+	res, err := gameService.CreateRoomWithContext(context.Background(), "tictactoe", "p1")
+	if err != nil {
+		t.Fatalf("CreateRoomWithContext() error = %v", err)
+	}
+	if _, err := gameService.JoinRoomWithContext(context.Background(), res.Room.RoomID, "p2", "tictactoe"); err != nil {
+		t.Fatalf("JoinRoomWithContext() error = %v", err)
+	}
+
+	clients := NewClientRegistry()
+	p1Client := newBufferedTestClient("p1")
+	p2Client := newBufferedTestClient("p2")
+	p2Client.Generation = 1
+	clients.clients["p1"] = p1Client
+	clients.clients["p2"] = p2Client
+	clients.generations["p2"] = 1
+
+	handlePlayerDisconnection(
+		context.Background(),
+		clients,
+		gameService,
+		res.Room.RoomID,
+		"p2",
+		game.PlayerSnapshot{ID: "p2"},
+		p2Client,
+	)
+
+	event := readTestEvent(t, p1Client)
+	if event.Type != EventPlayerReconnecting {
+		t.Fatalf("event type = %q, want %q", event.Type, EventPlayerReconnecting)
+	}
+}
+
+func TestConnectionEventType(t *testing.T) {
+	tests := []struct {
+		name            string
+		wasConnected    bool
+		wasDisconnected bool
+		want            string
+	}{
+		{name: "duplicate active connection", wasConnected: true, wasDisconnected: false, want: ""},
+		{name: "reconnect after temporary disconnect", wasConnected: false, wasDisconnected: true, want: EventPlayerReconnected},
+		{name: "new websocket join", wasConnected: false, wasDisconnected: false, want: EventPlayerJoined},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := connectionEventType(tt.wasConnected, tt.wasDisconnected); got != tt.want {
+				t.Fatalf("connectionEventType() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func newBufferedTestClient(playerID string) *Client {
 	return &Client{
 		PlayerID: playerID,

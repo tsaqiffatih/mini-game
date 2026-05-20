@@ -347,7 +347,7 @@ func (s *GameService) RemovePlayerAfterDelay(roomID string, playerID string, del
 func (s *GameService) RemovePlayerAfterDelayWithContext(ctx context.Context, roomID string, playerID string, delay time.Duration, isConnected func(string) bool) {
 	s.removePlayerAfterDelayWithContext(ctx, roomID, playerID, 0, delay, func(playerID string, _ uint64) bool {
 		return !isConnected(playerID)
-	})
+	}, nil)
 }
 
 func (s *GameService) RemovePlayerAfterDelayForGeneration(roomID string, playerID string, generation uint64, delay time.Duration, isCurrentDisconnectedGeneration func(string, uint64) bool) {
@@ -355,10 +355,18 @@ func (s *GameService) RemovePlayerAfterDelayForGeneration(roomID string, playerI
 }
 
 func (s *GameService) RemovePlayerAfterDelayForGenerationWithContext(ctx context.Context, roomID string, playerID string, generation uint64, delay time.Duration, isCurrentDisconnectedGeneration func(string, uint64) bool) {
-	s.removePlayerAfterDelayWithContext(ctx, roomID, playerID, generation, delay, isCurrentDisconnectedGeneration)
+	s.removePlayerAfterDelayWithContext(ctx, roomID, playerID, generation, delay, isCurrentDisconnectedGeneration, nil)
 }
 
-func (s *GameService) removePlayerAfterDelayWithContext(ctx context.Context, roomID string, playerID string, generation uint64, delay time.Duration, shouldRemove func(string, uint64) bool) {
+func (s *GameService) RemovePlayerAfterDelayForGenerationWithCallback(roomID string, playerID string, generation uint64, delay time.Duration, isCurrentDisconnectedGeneration func(string, uint64) bool, onRemoved func()) {
+	s.RemovePlayerAfterDelayForGenerationWithCallbackContext(s.context(), roomID, playerID, generation, delay, isCurrentDisconnectedGeneration, onRemoved)
+}
+
+func (s *GameService) RemovePlayerAfterDelayForGenerationWithCallbackContext(ctx context.Context, roomID string, playerID string, generation uint64, delay time.Duration, isCurrentDisconnectedGeneration func(string, uint64) bool, onRemoved func()) {
+	s.removePlayerAfterDelayWithContext(ctx, roomID, playerID, generation, delay, isCurrentDisconnectedGeneration, onRemoved)
+}
+
+func (s *GameService) removePlayerAfterDelayWithContext(ctx context.Context, roomID string, playerID string, generation uint64, delay time.Duration, shouldRemove func(string, uint64) bool, onRemoved func()) {
 	go func() {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
@@ -384,6 +392,19 @@ func (s *GameService) removePlayerAfterDelayWithContext(ctx context.Context, roo
 			return
 		}
 
+		if _, err := room.GetPlayer(playerID); err != nil {
+			return
+		}
+		if !shouldRemove(playerID, generation) {
+			observability.Logger().InfoContext(ctx, "delayed player removal skipped",
+				"room_id", roomID,
+				"player_id", playerID,
+				"event_type", "player_removal_skipped",
+				"generation", generation,
+			)
+			return
+		}
+
 		shouldRemoveRoom := room.HandlePlayerDisconnected(playerID)
 		if shouldRemoveRoom {
 			observability.Logger().InfoContext(ctx, "room removed after player disconnect",
@@ -394,6 +415,10 @@ func (s *GameService) removePlayerAfterDelayWithContext(ctx context.Context, roo
 			)
 			_ = s.rooms.Delete(ctx, roomID)
 			return
+		}
+
+		if onRemoved != nil {
+			onRemoved()
 		}
 
 		observability.Logger().InfoContext(ctx, "player removed after disconnect grace period",
