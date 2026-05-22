@@ -18,6 +18,14 @@ interface TicTacToeBoardProps {
   playerMark: string;
 }
 
+type ChatMessagePayload = {
+  id: string;
+  player_id: string;
+  player_mark?: string;
+  message: string;
+  created_at: string;
+};
+
 export default function TicTacToeBoard({
   playerId,
   roomId,
@@ -59,6 +67,7 @@ export default function TicTacToeBoard({
 
   const lastMessageRef = useRef<string | null>(null); // untuk melacak pesan terakhir
   const isChatOpenRef = useRef(false);
+  const latestStateVersionRef = useRef(0);
 
   // useEffect for message
   useEffect(() => {
@@ -67,7 +76,7 @@ export default function TicTacToeBoard({
 
   useEffect(() => {
     const handlePopState = () => {
-      handleLeaveGameAlert(router);
+      handleLeaveGameAlert(router, "tictactoe");
     };
 
     window.history.pushState(null, "", window.location.href);
@@ -89,8 +98,26 @@ export default function TicTacToeBoard({
           const state = msg.payload?.room ?? msg.payload;
 
           if (!state) break;
+          if (
+            typeof state.state_version === "number" &&
+            state.state_version <= latestStateVersionRef.current
+          ) {
+            break;
+          }
+          if (typeof state.state_version === "number") {
+            latestStateVersionRef.current = state.state_version;
+          }
 
           setRoomState(state.state);
+          const me = Array.isArray(state.players)
+            ? state.players.find((player: { player_id?: string }) => {
+                return player.player_id === playerId;
+              })
+            : null;
+
+          if (typeof me?.player_mark === "string") {
+            setPlayerMarkState(me.player_mark);
+          }
 
           const game = state.tictactoe;
 
@@ -108,6 +135,15 @@ export default function TicTacToeBoard({
 
           if (playerId !== joinedPlayerId) {
             const state = msg.payload?.room ?? msg.payload;
+            if (
+              typeof state?.state_version === "number" &&
+              state.state_version <= latestStateVersionRef.current
+            ) {
+              break;
+            }
+            if (typeof state?.state_version === "number") {
+              latestStateVersionRef.current = state.state_version;
+            }
             setRoomState(state.state);
 
             showAlert({
@@ -156,15 +192,15 @@ export default function TicTacToeBoard({
           const messages = msg.payload?.messages ?? [];
 
           setChatMessages((prev) => {
-            const map = new Map();
+            const map = new Map<string, (typeof prev)[number]>();
 
-            [...prev, ...messages].forEach((m: any) => {
+            [...prev, ...(messages as ChatMessagePayload[])].forEach((m) => {
               map.set(m.id, {
                 id: m.id,
-                sender: m.player_id,
-                playerMark: m.player_mark,
+                sender: "sender" in m ? m.sender : m.player_id,
+                playerMark: "playerMark" in m ? m.playerMark : m.player_mark,
                 message: m.message,
-                timestamp: m.created_at,
+                timestamp: "timestamp" in m ? m.timestamp : m.created_at,
               });
             });
 

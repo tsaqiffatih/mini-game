@@ -3,36 +3,40 @@
 import Lobby from "@/components/Lobby";
 import TicTacToeBoard from "@/components/TicTacToeBoard";
 import { showAlert, showErrorAlert } from "@/utils/alerthelper";
-import { clearGameSession, getGameSession } from "@/utils/gameStorage";
+import { clearGameSession } from "@/utils/gameStorage";
+import { useRoomSession } from "@/utils/useRoomSession";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 
 const TicTacToePage: React.FC = () => {
-  const [playerId, setPlayerId] = useState<string>("");
-  const [roomId, setRoomId] = useState<string>("");
-  const [playerMark, setPlayerMark] = useState<string>("");
-
   const router = useRouter();
+  const missingPlayerAlertShownRef = useRef(false);
+  const {
+    status,
+    isChecking,
+    isValid,
+    playerId,
+    roomId,
+    playerMark,
+    acceptSession,
+    error,
+  } = useRoomSession("tictactoe");
 
   const handleRoomReady = (roomId: string, playerMark: string) => {
-    setRoomId(roomId);
-    setPlayerMark(playerMark);
+    acceptSession(roomId, playerMark);
   };
 
   useEffect(() => {
-    const storedPlayerId = localStorage.getItem("playerId") || "";
-    if (!storedPlayerId) {
+    if (
+      status === "invalid" &&
+      !playerId &&
+      !missingPlayerAlertShownRef.current
+    ) {
+      missingPlayerAlertShownRef.current = true;
       showErrorAlert("Player not found. Please register first.");
       router.push("/");
-      return;
     }
-
-    const session = getGameSession("tictactoe");
-
-    setPlayerMark(session.playerMark || "");
-    setRoomId(session.roomId || "");
-    setPlayerId(storedPlayerId);
-  }, [router]);
+  }, [playerId, router, status]);
 
   return (
     <div className=" overflow-hidden sm:p-2 px-4 h-screen flex flex-col items-center justify-center">
@@ -49,12 +53,12 @@ const TicTacToePage: React.FC = () => {
               cancelButtonText: "No, stay",
             }).then((result) => {
               if (result.isConfirmed) {
-                clearGameSession("tictactoe")
+                clearGameSession("tictactoe");
                 router.push("/");
               }
             });
           } else {
-            clearGameSession("tictactoe")
+            clearGameSession("tictactoe");
             router.push("/");
           }
         }}
@@ -75,12 +79,19 @@ const TicTacToePage: React.FC = () => {
         </svg>
         Home
       </button>
-      {!roomId ? (
-        <Lobby
-          playerId={playerId}
-          onRoomReady={handleRoomReady}
-          gameType="tictactoe"
-        />
+      {isChecking ? (
+        <span className="loading loading-spinner loading-lg" />
+      ) : !isValid ? (
+        <>
+          {error && playerId && (
+            <p className="text-sm text-warning mb-4 text-center">{error}</p>
+          )}
+          <Lobby
+            playerId={playerId}
+            onRoomReady={handleRoomReady}
+            gameType="tictactoe"
+          />
+        </>
       ) : (
         <TicTacToeBoard
           playerId={playerId}

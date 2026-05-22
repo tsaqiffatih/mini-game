@@ -3,37 +3,39 @@
 import ChessBoard from "@/components/ChessBoard";
 import Lobby from "@/components/Lobby";
 import { showAlert, showErrorAlert } from "@/utils/alerthelper";
-import { clearGameSession, getGameSession } from "@/utils/gameStorage";
+import { clearGameSession } from "@/utils/gameStorage";
+import { useRoomSession } from "@/utils/useRoomSession";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 
 const ChessPage: React.FC = () => {
-  const [playerId, setPlayerId] = useState<string>("");
-  const [roomId, setRoomId] = useState<string>("");
-  const [playerMark, setPlayerMark] = useState<string>("");
-
   const router = useRouter();
+  const missingPlayerAlertShownRef = useRef(false);
+  const {
+    status,
+    isChecking,
+    isValid,
+    playerId,
+    roomId,
+    acceptSession,
+    error,
+  } = useRoomSession("chess");
 
   const handleRoomIdReady = (roomId: string, playerMark: string) => {
-    setRoomId(roomId);
-    setPlayerMark(playerMark);
+    acceptSession(roomId, playerMark);
   };
 
   useEffect(() => {
-    const storedPlayerId = localStorage.getItem("playerId") || "";
-    if (!storedPlayerId) {
+    if (
+      status === "invalid" &&
+      !playerId &&
+      !missingPlayerAlertShownRef.current
+    ) {
+      missingPlayerAlertShownRef.current = true;
       showErrorAlert("Player ID not found. Please register first.");
       router.push("/");
-      return;
     }
-
-    const session = getGameSession("chess");
-
-    setPlayerMark(session.playerMark || "");
-    setRoomId(session.roomId || "");
-
-    setPlayerId(storedPlayerId);
-  }, [router]);
+  }, [playerId, router, status]);
 
   return (
     <div className="p2">
@@ -50,12 +52,12 @@ const ChessPage: React.FC = () => {
               cancelButtonText: "No, stay",
             }).then((result) => {
               if (result.isConfirmed) {
-                clearGameSession("chess")
+                clearGameSession("chess");
                 router.push("/");
               }
             });
           } else {
-            clearGameSession("chess")
+            clearGameSession("chess");
             router.push("/");
           }
         }}
@@ -76,8 +78,15 @@ const ChessPage: React.FC = () => {
         </svg>
         Home
       </button>
-      {!roomId ? (
+      {isChecking ? (
+        <div className="overflow-hidden sm:p-2 px-5 h-screen flex flex-col items-center justify-center">
+          <span className="loading loading-spinner loading-lg" />
+        </div>
+      ) : !isValid ? (
         <div className=" overflow-hidden sm:p-2 px-5 h-screen flex flex-col items-center justify-center">
+          {error && playerId && (
+            <p className="text-sm text-warning mb-4 text-center">{error}</p>
+          )}
           <Lobby
             playerId={playerId}
             onRoomReady={handleRoomIdReady}
@@ -85,12 +94,7 @@ const ChessPage: React.FC = () => {
           />
         </div>
       ) : (
-        <ChessBoard
-          roomId={roomId}
-          playerId={playerId}
-          // playerMark={playerMark}
-          // initialState={initialState}
-        />
+        <ChessBoard roomId={roomId} playerId={playerId} />
       )}
     </div>
   );

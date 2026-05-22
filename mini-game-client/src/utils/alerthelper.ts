@@ -1,10 +1,14 @@
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import Swal, { SweetAlertOptions } from "sweetalert2";
+import { clearGameSession } from "./gameStorage";
 
+type GameType = "chess" | "tictactoe";
 
 const getThemeClass = (): SweetAlertOptions["customClass"] => {
-  const theme = localStorage.getItem("theme"); 
-  return theme === "dark" ? { popup: "swal-theme-dark" } : { popup: "swal-theme-light" };
+  const theme = localStorage.getItem("theme");
+  return theme === "dark"
+    ? { popup: "swal-theme-dark" }
+    : { popup: "swal-theme-light" };
 };
 
 export const showAlert = (options: SweetAlertOptions) => {
@@ -30,7 +34,10 @@ export const showErrorAlert = (message: string) => {
   });
 };
 
-export const handleLeaveGameAlert = (router: AppRouterInstance) => {
+export const handleLeaveGameAlert = (
+  router: AppRouterInstance,
+  gameType: GameType,
+) => {
   showAlert({
     title: "Leave Game?",
     text: "Are you sure you want to leave the game? Your progress will be lost.",
@@ -40,8 +47,7 @@ export const handleLeaveGameAlert = (router: AppRouterInstance) => {
     cancelButtonText: "No, stay",
   }).then((result) => {
     if (result.isConfirmed) {
-      localStorage.removeItem("roomId");
-      localStorage.removeItem("playerMark");
+      clearGameSession(gameType);
       router.push("/");
     } else {
       window.history.pushState(null, "", window.location.href);
