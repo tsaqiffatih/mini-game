@@ -314,6 +314,9 @@ func (r *Room) RemoveInactivePlayers(now time.Time, duration time.Duration) {
 	defer r.mu.Unlock()
 
 	for playerID, player := range r.players {
+		if player.IsAI {
+			continue
+		}
 		if now.Sub(player.LastActive) > duration {
 			r.removePlayerLocked(playerID)
 			observability.Logger().Info("inactive player removed from room",

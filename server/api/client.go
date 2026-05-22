@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strconv"
 	"sync"
 	"time"
 
@@ -9,12 +10,14 @@ import (
 )
 
 type Client struct {
-	PlayerID   string
-	Generation uint64
-	Conn       *websocket.Conn
-	Send       chan []byte
-	done       chan struct{}
-	close      sync.Once
+	PlayerID     string
+	RoomID       string
+	Generation   uint64
+	ConnectionID string
+	Conn         *websocket.Conn
+	Send         chan []byte
+	done         chan struct{}
+	close        sync.Once
 }
 
 type ClientRegistry struct {
@@ -35,22 +38,70 @@ func (r *ClientRegistry) Attach(playerID string, conn *websocket.Conn, pongWait 
 }
 
 func (r *ClientRegistry) AttachWithGeneration(playerID string, generation uint64, conn *websocket.Conn, pongWait time.Duration) *Client {
+	return r.AttachWithGenerationInRoom("", playerID, generation, conn, pongWait)
+}
+
+func (r *ClientRegistry) AttachWithGenerationInRoom(roomID string, playerID string, generation uint64, conn *websocket.Conn, pongWait time.Duration) *Client {
 	if generation == 0 {
 		generation = r.NextGeneration(playerID)
 	}
 
 	client := &Client{
-		PlayerID:   playerID,
-		Generation: generation,
-		Conn:       conn,
-		Send:       make(chan []byte, 256),
-		done:       make(chan struct{}),
+		PlayerID:     playerID,
+		RoomID:       roomID,
+		Generation:   generation,
+		ConnectionID: playerID + "#" + strconv.FormatUint(generation, 10),
+		Conn:         conn,
+		Send:         make(chan []byte, 256),
+		done:         make(chan struct{}),
 	}
 
-	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetReadLimit(maxMessageBytes)
+	if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		observability.Logger().Warn("websocket read deadline setup failed",
+			"room_id", roomID,
+			"player_id", playerID,
+			"event_type", "websocket_read_deadline_error",
+			"generation", generation,
+			"connection_id", client.ConnectionID,
+			"error", err,
+		)
+	}
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(pongWait))
+		if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+			observability.Logger().Warn("websocket pong deadline refresh failed",
+				"room_id", roomID,
+				"player_id", playerID,
+				"event_type", "websocket_pong_deadline_error",
+				"generation", generation,
+				"connection_id", client.ConnectionID,
+				"error", err,
+			)
+			return err
+		}
+
+		observability.Logger().Debug("websocket pong received",
+			"room_id", roomID,
+			"player_id", playerID,
+			"event_type", "websocket_pong",
+			"generation", generation,
+			"connection_id", client.ConnectionID,
+		)
 		return nil
+	})
+	conn.SetCloseHandler(func(code int, text string) error {
+		observability.Logger().Info("websocket close frame received",
+			"room_id", roomID,
+			"player_id", playerID,
+			"event_type", "websocket_close_frame_received",
+			"generation", generation,
+			"connection_id", client.ConnectionID,
+			"close_code", code,
+			"close_reason", text,
+		)
+		message := websocket.FormatCloseMessage(code, "")
+		deadline := time.Now().Add(writeWait)
+		return conn.WriteControl(websocket.CloseMessage, message, deadline)
 	})
 
 	var existing *Client
@@ -64,10 +115,16 @@ func (r *ClientRegistry) AttachWithGeneration(playerID string, generation uint64
 
 	if existing != nil {
 		observability.Logger().Info("websocket duplicate connection replaced",
-			"room_id", "",
+			"room_id", existing.RoomID,
 			"player_id", playerID,
 			"event_type", "websocket_duplicate_replaced",
 			"close_code", CloseCodeDuplicateConnection,
+			"generation", generation,
+			"connection_id", client.ConnectionID,
+			"previous_generation", existing.Generation,
+			"previous_connection_id", existing.ConnectionID,
+			"previous_room_id", existing.RoomID,
+			"new_room_id", roomID,
 		)
 		existing.CloseWithCode(CloseCodeDuplicateConnection, "duplicate connection")
 	}
@@ -94,6 +151,11 @@ func (r *ClientRegistry) Get(playerID string) (*Client, bool) {
 func (r *ClientRegistry) IsConnected(playerID string) bool {
 	_, exists := r.Get(playerID)
 	return exists
+}
+
+func (r *ClientRegistry) HasClientInRoom(playerID string, roomID string) bool {
+	client, exists := r.Get(playerID)
+	return exists && client.RoomID == roomID
 }
 
 func (r *ClientRegistry) IsCurrentDisconnectedGeneration(playerID string, generation uint64) bool {
@@ -192,9 +254,11 @@ func (c *Client) WritePump(writeWait time.Duration, pingPeriod time.Duration) {
 
 		if r := recover(); r != nil {
 			observability.Logger().Error("websocket write pump recovered",
-				"room_id", "",
+				"room_id", c.RoomID,
 				"player_id", c.PlayerID,
 				"event_type", "websocket_write_recovered",
+				"generation", c.Generation,
+				"connection_id", c.ConnectionID,
 				"panic", r,
 			)
 		}
@@ -207,9 +271,11 @@ func (c *Client) WritePump(writeWait time.Duration, pingPeriod time.Duration) {
 		case message := <-c.Send:
 			if err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 				observability.Logger().Warn("websocket write deadline failed",
-					"room_id", "",
+					"room_id", c.RoomID,
 					"player_id", c.PlayerID,
 					"event_type", "websocket_write_error",
+					"generation", c.Generation,
+					"connection_id", c.ConnectionID,
 					"error", err,
 				)
 				return
@@ -217,9 +283,11 @@ func (c *Client) WritePump(writeWait time.Duration, pingPeriod time.Duration) {
 
 			if err := c.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				observability.Logger().Warn("websocket write failed",
-					"room_id", "",
+					"room_id", c.RoomID,
 					"player_id", c.PlayerID,
 					"event_type", "websocket_write_error",
+					"generation", c.Generation,
+					"connection_id", c.ConnectionID,
 					"error", err,
 				)
 				return
@@ -228,18 +296,22 @@ func (c *Client) WritePump(writeWait time.Duration, pingPeriod time.Duration) {
 		case <-ticker.C:
 			if err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 				observability.Logger().Warn("websocket ping deadline failed",
-					"room_id", "",
+					"room_id", c.RoomID,
 					"player_id", c.PlayerID,
 					"event_type", "websocket_ping_error",
+					"generation", c.Generation,
+					"connection_id", c.ConnectionID,
 					"error", err,
 				)
 				return
 			}
 			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				observability.Logger().Warn("websocket ping failed",
-					"room_id", "",
+					"room_id", c.RoomID,
 					"player_id", c.PlayerID,
 					"event_type", "websocket_ping_error",
+					"generation", c.Generation,
+					"connection_id", c.ConnectionID,
 					"error", err,
 				)
 				return

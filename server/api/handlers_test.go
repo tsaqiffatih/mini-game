@@ -280,6 +280,65 @@ func TestJoinRoomAPI(t *testing.T) {
 	}
 }
 
+func TestRecoverRoomAPI(t *testing.T) {
+	server := newAPITestServer()
+	registerPlayerViaAPI(t, server, "p1")
+	created := createRoomViaAPI(t, server, "p1")
+
+	recorder := doJSONRequest(t, server.router, http.MethodPost, "/room/recover", map[string]string{
+		"game_type": "tictactoe",
+		"player_id": "p1",
+		"room_id":   created.Room.RoomID,
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("recover room status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var response apiResponse
+	decodeJSONResponse(t, recorder, &response)
+	if !response.Success {
+		t.Fatalf("recover response success = false, body=%s", recorder.Body.String())
+	}
+
+	var data struct {
+		PlayerID   string `json:"player_id"`
+		PlayerMark string `json:"player_mark"`
+		Room       struct {
+			RoomID   string `json:"room_id"`
+			GameType string `json:"game_type"`
+		} `json:"room"`
+	}
+	if err := json.Unmarshal(response.Data, &data); err != nil {
+		t.Fatalf("decode recover data: %v", err)
+	}
+	if data.PlayerID != "p1" {
+		t.Fatalf("player_id = %q, want p1", data.PlayerID)
+	}
+	if data.PlayerMark == "" {
+		t.Fatalf("player_mark is empty")
+	}
+	if data.Room.RoomID != created.Room.RoomID {
+		t.Fatalf("room_id = %q, want %q", data.Room.RoomID, created.Room.RoomID)
+	}
+	if data.Room.GameType != "tictactoe" {
+		t.Fatalf("game_type = %q, want tictactoe", data.Room.GameType)
+	}
+}
+
+func TestRecoverRoomAPI_StaleRoomReturnsNotFound(t *testing.T) {
+	server := newAPITestServer()
+	registerPlayerViaAPI(t, server, "p1")
+
+	recorder := doJSONRequest(t, server.router, http.MethodPost, "/room/recover", map[string]string{
+		"game_type": "tictactoe",
+		"player_id": "p1",
+		"room_id":   "missing",
+	})
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("recover stale room status = %d, want %d; body=%s", recorder.Code, http.StatusNotFound, recorder.Body.String())
+	}
+}
+
 func TestTicTacToeMoveAPI(t *testing.T) {
 	server := newAPITestServer()
 	registerPlayerViaAPI(t, server, "p1")

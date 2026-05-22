@@ -244,6 +244,28 @@ func (s *GameService) GetPlayerInRoomWithContext(ctx context.Context, roomID str
 	return player, nil
 }
 
+func (s *GameService) RecoverRoomSessionWithContext(ctx context.Context, roomID string, playerID string, gameType string) (game.RoomSnapshot, game.PlayerSnapshot, error) {
+	if roomID == "" || playerID == "" || gameType == "" {
+		return game.RoomSnapshot{}, game.PlayerSnapshot{}, ErrGameTypeRequired
+	}
+
+	room, err := s.rooms.GetByID(ctx, roomID)
+	if err != nil {
+		return game.RoomSnapshot{}, game.PlayerSnapshot{}, ErrRoomNotFound
+	}
+
+	if room.GameType() != gameType {
+		return game.RoomSnapshot{}, game.PlayerSnapshot{}, ErrGameTypeMismatch
+	}
+
+	player, err := room.GetPlayer(playerID)
+	if err != nil {
+		return game.RoomSnapshot{}, game.PlayerSnapshot{}, ErrPlayerNotFound
+	}
+
+	return room.Snapshot(), player, nil
+}
+
 func (s *GameService) UpdatePlayerActivity(roomID string, playerID string) {
 	s.UpdatePlayerActivityWithContext(s.context(), roomID, playerID)
 }
@@ -383,16 +405,33 @@ func (s *GameService) removePlayerAfterDelayWithContext(ctx context.Context, roo
 				"player_id", playerID,
 				"event_type", "player_removal_skipped",
 				"generation", generation,
+				"reason", "generation_mismatch_or_reconnected",
 			)
 			return
 		}
 
 		room, err := s.rooms.GetByID(ctx, roomID)
 		if err != nil {
+			observability.Logger().WarnContext(ctx, "delayed player removal room missing",
+				"room_id", roomID,
+				"player_id", playerID,
+				"event_type", "player_removal_skipped",
+				"generation", generation,
+				"reason", "room_not_found",
+				"error", err,
+			)
 			return
 		}
 
 		if _, err := room.GetPlayer(playerID); err != nil {
+			observability.Logger().WarnContext(ctx, "delayed player removal player missing",
+				"room_id", roomID,
+				"player_id", playerID,
+				"event_type", "player_removal_skipped",
+				"generation", generation,
+				"reason", "player_not_found",
+				"error", err,
+			)
 			return
 		}
 		if !shouldRemove(playerID, generation) {
@@ -401,6 +440,7 @@ func (s *GameService) removePlayerAfterDelayWithContext(ctx context.Context, roo
 				"player_id", playerID,
 				"event_type", "player_removal_skipped",
 				"generation", generation,
+				"reason", "generation_mismatch_or_reconnected",
 			)
 			return
 		}
@@ -476,11 +516,15 @@ func (s *GameService) CleanupRooms(ctx context.Context, inactiveFor time.Duratio
 
 		room.RemoveInactivePlayers(now, inactiveFor)
 		if room.IsEmpty() || roomInactive(room, now, inactiveFor) {
+			snapshot := room.Snapshot()
 			room.Close()
 			observability.Logger().InfoContext(ctx, "room cleanup removed room",
 				"room_id", room.RoomID,
 				"player_id", "",
 				"event_type", "room_cleanup_removed",
+				"game_type", snapshot.GameType,
+				"is_ai_enabled", snapshot.IsAIEnabled,
+				"players", len(snapshot.Players),
 			)
 			if err := s.rooms.Delete(ctx, room.RoomID); err != nil {
 				return err

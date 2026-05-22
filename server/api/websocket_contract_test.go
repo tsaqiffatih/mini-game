@@ -193,21 +193,125 @@ func TestHandlePlayerDisconnection_BroadcastsReconnectingNotLeft(t *testing.T) {
 	}
 }
 
+func TestFastReconnectReplacement_BroadcastsReconnectedToOpponent(t *testing.T) {
+	gameService := service.NewGameService(infrastructure.NewMemoryRoomRepository(), game.NewPlayerManager())
+	if _, err := gameService.AddPlayer("p1"); err != nil {
+		t.Fatalf("AddPlayer(p1) error = %v", err)
+	}
+	if _, err := gameService.AddPlayer("p2"); err != nil {
+		t.Fatalf("AddPlayer(p2) error = %v", err)
+	}
+	res, err := gameService.CreateRoomWithContext(context.Background(), "tictactoe", "p1")
+	if err != nil {
+		t.Fatalf("CreateRoomWithContext() error = %v", err)
+	}
+	if _, err := gameService.JoinRoomWithContext(context.Background(), res.Room.RoomID, "p2", "tictactoe"); err != nil {
+		t.Fatalf("JoinRoomWithContext() error = %v", err)
+	}
+
+	clients := NewClientRegistry()
+	p1Client := newBufferedTestClient("p1")
+	p2Client := newBufferedTestClient("p2")
+	p1Client.RoomID = res.Room.RoomID
+	p2Client.RoomID = res.Room.RoomID
+	clients.clients["p1"] = p1Client
+	clients.clients["p2"] = p2Client
+
+	player, err := gameService.GetPlayerInRoomWithContext(context.Background(), res.Room.RoomID, "p2")
+	if err != nil {
+		t.Fatalf("GetPlayerInRoomWithContext() error = %v", err)
+	}
+
+	notifyRoomOnConnection(
+		context.Background(),
+		clients,
+		gameService,
+		res.Room.RoomID,
+		player,
+		connectionEventType(true, false, true),
+	)
+
+	event := readTestEvent(t, p1Client)
+	if event.Type != EventPlayerReconnected {
+		t.Fatalf("event type = %q, want %q", event.Type, EventPlayerReconnected)
+	}
+}
+
+func TestHandlePlayerDisconnection_StaleOldClientDoesNotDisconnectNewSession(t *testing.T) {
+	gameService := service.NewGameService(infrastructure.NewMemoryRoomRepository(), game.NewPlayerManager())
+	if _, err := gameService.AddPlayer("p1"); err != nil {
+		t.Fatalf("AddPlayer(p1) error = %v", err)
+	}
+	if _, err := gameService.AddPlayer("p2"); err != nil {
+		t.Fatalf("AddPlayer(p2) error = %v", err)
+	}
+	res, err := gameService.CreateRoomWithContext(context.Background(), "tictactoe", "p1")
+	if err != nil {
+		t.Fatalf("CreateRoomWithContext() error = %v", err)
+	}
+	if _, err := gameService.JoinRoomWithContext(context.Background(), res.Room.RoomID, "p2", "tictactoe"); err != nil {
+		t.Fatalf("JoinRoomWithContext() error = %v", err)
+	}
+
+	clients := NewClientRegistry()
+	p1Client := newBufferedTestClient("p1")
+	oldP2Client := newBufferedTestClient("p2")
+	newP2Client := newBufferedTestClient("p2")
+	p1Client.RoomID = res.Room.RoomID
+	oldP2Client.RoomID = res.Room.RoomID
+	oldP2Client.Generation = 1
+	newP2Client.RoomID = res.Room.RoomID
+	newP2Client.Generation = 2
+	clients.clients["p1"] = p1Client
+	clients.clients["p2"] = newP2Client
+	clients.generations["p2"] = 2
+
+	player, err := gameService.GetPlayerInRoomWithContext(context.Background(), res.Room.RoomID, "p2")
+	if err != nil {
+		t.Fatalf("GetPlayerInRoomWithContext() error = %v", err)
+	}
+
+	handlePlayerDisconnection(
+		context.Background(),
+		clients,
+		gameService,
+		res.Room.RoomID,
+		"p2",
+		player,
+		oldP2Client,
+	)
+
+	assertNoTestEvent(t, p1Client)
+
+	player, err = gameService.GetPlayerInRoomWithContext(context.Background(), res.Room.RoomID, "p2")
+	if err != nil {
+		t.Fatalf("GetPlayerInRoomWithContext() after stale disconnect error = %v", err)
+	}
+	if player.Session != game.PlayerSessionConnected {
+		t.Fatalf("player session = %q, want %q", player.Session, game.PlayerSessionConnected)
+	}
+	if !clients.IsConnected("p2") {
+		t.Fatalf("new p2 client should remain connected")
+	}
+}
+
 func TestConnectionEventType(t *testing.T) {
 	tests := []struct {
-		name            string
-		wasConnected    bool
-		wasDisconnected bool
-		want            string
+		name                   string
+		wasConnected           bool
+		wasDisconnected        bool
+		isReconnectReplacement bool
+		want                   string
 	}{
 		{name: "duplicate active connection", wasConnected: true, wasDisconnected: false, want: ""},
+		{name: "fast reconnect replacement", wasConnected: true, wasDisconnected: false, isReconnectReplacement: true, want: EventPlayerReconnected},
 		{name: "reconnect after temporary disconnect", wasConnected: false, wasDisconnected: true, want: EventPlayerReconnected},
 		{name: "new websocket join", wasConnected: false, wasDisconnected: false, want: EventPlayerJoined},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := connectionEventType(tt.wasConnected, tt.wasDisconnected); got != tt.want {
+			if got := connectionEventType(tt.wasConnected, tt.wasDisconnected, tt.isReconnectReplacement); got != tt.want {
 				t.Fatalf("connectionEventType() = %q, want %q", got, tt.want)
 			}
 		})
@@ -217,7 +321,7 @@ func TestConnectionEventType(t *testing.T) {
 func newBufferedTestClient(playerID string) *Client {
 	return &Client{
 		PlayerID: playerID,
-		Send:     make(chan []byte, 1),
+		Send:     make(chan []byte, 8),
 		done:     make(chan struct{}),
 	}
 }
@@ -289,6 +393,16 @@ func readTestEvent(t *testing.T, client *Client) Event {
 	default:
 		t.Fatalf("client did not receive an event")
 		return Event{}
+	}
+}
+
+func assertNoTestEvent(t *testing.T, client *Client) {
+	t.Helper()
+
+	select {
+	case message := <-client.Send:
+		t.Fatalf("client received unexpected event: %s", message)
+	default:
 	}
 }
 

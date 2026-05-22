@@ -192,6 +192,8 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
       case "room_update":
       case "game_update":
         const state = msg.payload?.room ?? msg.payload;
+        console.log(msg);
+        
 
         handleGameChessUpdate({
           state,
@@ -249,9 +251,11 @@ export default function ChessBoard({ roomId, playerId }: ChessBoardProps) {
 
       case "player_reconnecting":
         const reconnectingPlayerId = msg.payload?.data?.player?.player_id;
-
+        console.log("masuk atas if else reconnecting");
+        
         if (reconnectingPlayerId !== playerId) {
           setOpponentReconnecting(true);
+          console.log("masuk dalam if else reconnecting");
         }
         break;
 

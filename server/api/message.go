@@ -47,6 +47,8 @@ func readMessages(
 				"event_type", "websocket_read_closed",
 				"close_code", result.CloseCode,
 				"close_reason", result.CloseReason,
+				"generation", client.Generation,
+				"connection_id", client.ConnectionID,
 				"error", err,
 			)
 			break
@@ -59,6 +61,8 @@ func readMessages(
 				"room_id", roomID,
 				"player_id", player.ID,
 				"event_type", "websocket_message_invalid",
+				"generation", client.Generation,
+				"connection_id", client.ConnectionID,
 				"error", err,
 			)
 			continue
@@ -68,6 +72,8 @@ func readMessages(
 			"room_id", roomID,
 			"player_id", player.ID,
 			"event_type", message.Type,
+			"generation", client.Generation,
+			"connection_id", client.ConnectionID,
 		)
 
 		gameService.UpdatePlayerActivityWithContext(ctx, roomID, player.ID)
@@ -89,7 +95,7 @@ func websocketReadCloseResult(err error) websocketReadResult {
 
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		result.CloseReason = "timeout"
+		result.CloseReason = "read_timeout_waiting_for_pong"
 		return result
 	}
 

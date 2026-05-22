@@ -1,36 +1,79 @@
 import useWebSocket, { ReadyState } from "react-use-websocket";
-import { showErrorAlert } from "@/utils/alerthelper";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { showErrorAlert } from "./alerthelper";
+import { clearGameSession } from "./gameStorage";
 
 const backendUrl = process.env.NEXT_PUBLIC_WS_BACKEND_URL;
 
-const FATAL_CLOSE_CODES = new Set([
+const EXPIRED_CLOSE_CODES = new Set([
   4001, // room expired
+]);
+
+const REJECTED_CLOSE_CODES = new Set([
   4002, // room full
   4003, // invalid room
   4004, // player not found
 ]);
 
+const FATAL_CLOSE_CODES = new Set([
+  ...EXPIRED_CLOSE_CODES,
+  ...REJECTED_CLOSE_CODES,
+]);
+
+export type SocketState =
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "rejected"
+  | "expired";
+
+type GameWebSocketOptions = {
+  onExpired?: (reason: string) => void;
+  onRejected?: (reason: string) => void;
+};
+
 export const useGameWebSocket = (
   gameType: string,
   roomId: string,
   playerId: string,
+  options: GameWebSocketOptions = {},
 ) => {
-  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [isOffline, setIsOffline] = useState(() =>
+    typeof navigator === "undefined" ? false : !navigator.onLine,
+  );
   const [hasReconnectStopped, setHasReconnectStopped] = useState(false);
+  const [fatalSocketState, setFatalSocketState] = useState<SocketState | null>(
+    null,
+  );
+  const hasOpenedRef = useRef(false);
+
+  const socketUrl = useMemo(() => {
+    if (!backendUrl || !roomId || !playerId) return null;
+
+    const params = new URLSearchParams({
+      room_id: roomId,
+      player_id: playerId,
+    });
+
+    return `${backendUrl}/ws?${params.toString()}`;
+  }, [roomId, playerId]);
 
   const { sendMessage, lastMessage, readyState } = useWebSocket(
-    `${backendUrl}/ws?room_id=${roomId}&player_id=${playerId}`,
+    socketUrl,
     {
       onOpen: () => {
+        hasOpenedRef.current = true;
+        setHasReconnectStopped(false);
+        setFatalSocketState(null);
+
         if (process.env.NODE_ENV === "development") {
-          console.log("✅ WebSocket connected");
+          console.log(`WebSocket connected for ${gameType}`);
         }
       },
 
       onError: (error) => {
         if (process.env.NODE_ENV === "development") {
-          console.log("❌ WebSocket error:", error);
+          console.log("WebSocket error:", error);
         }
       },
 
@@ -41,13 +84,25 @@ export const useGameWebSocket = (
           );
         }
 
-        // fatal errors → stop reconnect
-        if (FATAL_CLOSE_CODES.has(event.code)) {
+        if (EXPIRED_CLOSE_CODES.has(event.code)) {
+          const reason = event.reason || "room expired";
+          setFatalSocketState("expired");
+          options.onExpired?.(reason);
           showErrorAlert("Room expired or player session is no longer valid.");
 
-          localStorage.removeItem("roomId");
-          localStorage.removeItem("playerMark");
+          clearGameSession(gameType);
+          setTimeout(() => {
+            window.location.href = "/";
+          }, 1000);
+          return;
+        }
 
+        if (REJECTED_CLOSE_CODES.has(event.code)) {
+          const reason = event.reason || "websocket rejected";
+          setFatalSocketState("rejected");
+          clearGameSession(gameType);
+
+          options.onRejected?.(reason);
           setTimeout(() => {
             window.location.href = "/";
           }, 1000);
@@ -55,13 +110,11 @@ export const useGameWebSocket = (
       },
 
       shouldReconnect: (closeEvent) => {
-        // fatal errors → do not reconnect
         if (FATAL_CLOSE_CODES.has(closeEvent.code)) {
           setHasReconnectStopped(true);
           return false;
         }
 
-        // normal close
         if (closeEvent.code === 1000) {
           setHasReconnectStopped(true);
           return false;
@@ -83,22 +136,32 @@ export const useGameWebSocket = (
 
         return delay;
       },
+      onReconnectStop: () => {
+        setHasReconnectStopped(true);
+      },
     },
+    Boolean(socketUrl),
   );
 
-  // derived reconnect state
-  const isReconnecting = useMemo(() => {
-    if (hasReconnectStopped) return false;
+  const socketState: SocketState = useMemo(() => {
+    if (fatalSocketState) return fatalSocketState;
+    if (readyState === ReadyState.OPEN) return "open";
+    if (isOffline) return "reconnecting";
+    if (hasReconnectStopped) return "rejected";
 
-    return (
-      isOffline ||
-      readyState === ReadyState.CONNECTING ||
-      readyState === ReadyState.CLOSING ||
-      readyState === ReadyState.CLOSED
-    );
-  }, [readyState, isOffline, hasReconnectStopped]);
+    if (readyState === ReadyState.CONNECTING) {
+      return hasOpenedRef.current ? "reconnecting" : "connecting";
+    }
 
-  // readable status
+    if (readyState === ReadyState.CLOSING || readyState === ReadyState.CLOSED) {
+      return hasOpenedRef.current ? "reconnecting" : "connecting";
+    }
+
+    return "connecting";
+  }, [fatalSocketState, readyState, isOffline, hasReconnectStopped]);
+
+  const isReconnecting = socketState === "reconnecting" || isOffline;
+
   const connectionStatus = useMemo(() => {
     return {
       [ReadyState.CONNECTING]: "CONNECTING",
@@ -111,12 +174,16 @@ export const useGameWebSocket = (
 
   useEffect(() => {
     const handleOffline = () => {
-      console.log("📴 Browser offline");
+      if (process.env.NODE_ENV === "development") {
+        console.log("Browser offline");
+      }
       setIsOffline(true);
     };
 
     const handleOnline = () => {
-      console.log("🌐 Browser online");
+      if (process.env.NODE_ENV === "development") {
+        console.log("Browser online");
+      }
       setIsOffline(false);
     };
 
@@ -132,19 +199,16 @@ export const useGameWebSocket = (
   // debug logger
   useEffect(() => {
     if (process.env.NODE_ENV === "development") {
-      console.log(`📡 WS STATUS: ${connectionStatus}`);
+      console.log(`WS STATUS: ${connectionStatus} (${socketState})`);
     }
-  }, [connectionStatus]);
-
-  useEffect(() => {
-    console.log("READY STATE:", readyState);
-  }, [readyState]);
+  }, [connectionStatus, socketState]);
 
   return {
     sendMessage,
     lastMessage,
     readyState,
     connectionStatus,
+    socketState,
     isReconnecting,
   };
 };

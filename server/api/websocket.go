@@ -56,9 +56,10 @@ const (
 	EventChatMessage        = "chat_message"
 	EventChatHistory        = "chat_history"
 
-	writeWait  = 10 * time.Second
-	pingPeriod = 5 * time.Second
-	pongWait   = 10 * time.Second
+	writeWait       = 10 * time.Second
+	pongWait        = 15 * time.Second
+	pingPeriod      = 5 * time.Second
+	maxMessageBytes = 64 * 1024
 )
 
 const (
@@ -127,6 +128,7 @@ func HandleWebSocket(
 
 	generation := clients.NextGeneration(playerID)
 	wasConnected := clients.IsConnected(playerID)
+	isReconnectReplacement := clients.HasClientInRoom(playerID, roomID)
 	wasDisconnected := player.Session == game.PlayerSessionDisconnected
 	if err := gameService.MarkPlayerConnectedWithContext(ctx, roomID, playerID); err != nil {
 		spanErr = err
@@ -143,7 +145,7 @@ func HandleWebSocket(
 		return
 	}
 
-	client := clients.AttachWithGeneration(playerID, generation, conn, pongWait)
+	client := clients.AttachWithGenerationInRoom(roomID, playerID, generation, conn, pongWait)
 
 	go client.WritePump(writeWait, pingPeriod)
 
@@ -152,9 +154,10 @@ func HandleWebSocket(
 		"player_id", playerID,
 		"event_type", "websocket_connected",
 		"generation", client.Generation,
+		"connection_id", client.ConnectionID,
 	)
 
-	notifyRoomOnConnection(ctx, clients, gameService, roomID, player, connectionEventType(wasConnected, wasDisconnected))
+	notifyRoomOnConnection(ctx, clients, gameService, roomID, player, connectionEventType(wasConnected, wasDisconnected, isReconnectReplacement))
 
 	done := make(chan websocketReadResult, 1)
 
@@ -169,6 +172,7 @@ func HandleWebSocket(
 		"close_code", readResult.CloseCode,
 		"close_reason", readResult.CloseReason,
 		"generation", client.Generation,
+		"connection_id", client.ConnectionID,
 	)
 
 	// goroutine for remove player after a delay
@@ -209,9 +213,25 @@ func websocketCloseForValidationError(err error) (int, string) {
 
 func handlePlayerDisconnection(ctx context.Context, clients *ClientRegistry, gameService *service.GameService, roomID string, playerID string, player game.PlayerSnapshot, client *Client) {
 	if !clients.RemoveClient(client) {
+		observability.Logger().InfoContext(ctx, "websocket disconnect ignored for stale client",
+			"room_id", roomID,
+			"player_id", playerID,
+			"event_type", "websocket_stale_disconnect_ignored",
+			"generation", client.Generation,
+			"connection_id", client.ConnectionID,
+		)
 		return
 	}
-	_ = gameService.MarkPlayerDisconnectedWithContext(ctx, roomID, playerID)
+	if err := gameService.MarkPlayerDisconnectedWithContext(ctx, roomID, playerID); err != nil {
+		observability.Logger().WarnContext(ctx, "mark player disconnected failed",
+			"room_id", roomID,
+			"player_id", playerID,
+			"event_type", "player_disconnect_mark_failed",
+			"generation", client.Generation,
+			"connection_id", client.ConnectionID,
+			"error", err,
+		)
+	}
 
 	NotifyToClientsInRoom(clients, gameService, roomID, EventPlayerReconnecting, EventPayload{
 		Message:   fmt.Sprintf("Player %s disconnected temporarily", playerID),
@@ -225,6 +245,7 @@ func handlePlayerDisconnection(ctx context.Context, clients *ClientRegistry, gam
 		"event_type", "player_removal_scheduled",
 		"delay", 30*time.Second,
 		"generation", client.Generation,
+		"connection_id", client.ConnectionID,
 	)
 	gameService.RemovePlayerAfterDelayForGenerationWithCallback(roomID, playerID, client.Generation, 30*time.Second, clients.IsCurrentDisconnectedGeneration, func() {
 		NotifyToClientsInRoom(clients, gameService, roomID, EventPlayerLeft, EventPayload{
@@ -235,7 +256,10 @@ func handlePlayerDisconnection(ctx context.Context, clients *ClientRegistry, gam
 	})
 }
 
-func connectionEventType(wasConnected bool, wasDisconnected bool) string {
+func connectionEventType(wasConnected bool, wasDisconnected bool, isReconnectReplacement bool) string {
+	if isReconnectReplacement {
+		return EventPlayerReconnected
+	}
 	if wasConnected {
 		return ""
 	}
