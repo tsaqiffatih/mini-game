@@ -5,7 +5,8 @@
 ---
 
 ## Project Vision
-A **modular, real‑time mini‑game platform** built on WebSockets, designed to host multiple turn‑based games with a unified matchmaking, session recovery, and AI integration.  The architecture makes it trivial to plug in new games while re‑using the same backend infrastructure.
+
+A **modular, real‑time mini‑game platform** built on WebSockets, designed to host multiple turn‑based games with a unified matchmaking, session recovery, and AI integration. The architecture makes it trivial to plug in new games while re‑using the same backend infrastructure.
 
 Currently supported games:
 | Game | Mode | AI Integration | Matchmaking / Room System | Session Recovery |
@@ -16,16 +17,18 @@ Currently supported games:
 ---
 
 ## Tech Stack
-| Layer | Technology |
-|-------|------------|
-| **Frontend** | **Next.js** (React) – UI built with **Chessground** for chess and a custom board for Tic‑Tac‑Toe. Tailwind‑CSS for responsive design. |
-| **Backend** | **Go** – Multi‑game engine exposing HTTP API and unified WebSocket endpoints. Each game implements a `GameEngine` interface, making it straightforward to add new games. |
-| **Reverse Proxy** | **Caddy** – TLS termination, dynamic origin validation, and proxying of HTTP & WS traffic. |
-| **Containerisation** | **Docker** & **Docker‑Compose** – One‑click local development and production‑ready deployment. |
+
+| Layer                | Technology                                                                                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Frontend**         | **Next.js** (React) – UI built with **Chessground** for chess and a custom board for Tic‑Tac‑Toe. Tailwind‑CSS for responsive design.                                    |
+| **Backend**          | **Go** – Multi‑game engine exposing HTTP API and unified WebSocket endpoints. Each game implements a `GameEngine` interface, making it straightforward to add new games. |
+| **Reverse Proxy**    | **Caddy** – TLS termination, dynamic origin validation, and proxying of HTTP & WS traffic.                                                                               |
+| **Containerisation** | **Docker** & **Docker‑Compose** – One‑click local development and production‑ready deployment.                                                                           |
 
 ---
 
 ## System Architecture
+
 ```mermaid
 flowchart TD
     Browser[Client Browser] <-->|HTTP / WS| Caddy[Caddy Reverse Proxy :8082]
@@ -49,6 +52,7 @@ flowchart TD
 ```
 
 **Scalable Architecture Highlights**
+
 - The backend defines a `GameEngine` interface; each game registers its own implementation (e.g., Chess, Tic‑Tac‑Toe). Adding a new turn‑based game only requires implementing this interface and wiring it into the unified WebSocket router.
 - Unified WebSocket manager routes messages based on a `game_type` field, keeping connection handling DRY.
 - Session recovery logic is shared across games: state snapshots are persisted per room, allowing clients to reconnect without losing progress.
@@ -56,6 +60,7 @@ flowchart TD
 ---
 
 ## Technical Highlights
+
 - **Unified WebSocket Manager** – Handles connections for multiple games, multiplexing messages via a `game` identifier.
 - **Modular Game Engines** – Each game implements the same interface (`Init`, `HandleMove`, `GenerateAI`, `Snapshot`), enabling plug‑and‑play addition of new games.
 - **AI Integration** – Chess uses Stockfish; Tic‑Tac‑Toe uses a lightweight minimax AI with configurable difficulty.
@@ -66,6 +71,7 @@ flowchart TD
 ---
 
 ## Quick Start / How to Run
+
 ```bash
 # 1️⃣ Clone the repository
 git clone https://github.com/your-username/mini-game.git
@@ -77,9 +83,11 @@ cd mini-game
 # 3️⃣ Build and start the stack using Docker Compose
 docker compose up --build   # or: docker compose up -d --build
 ```
+
 The platform will be reachable at **http://localhost:8082** (Caddy fronts the services).
 
 ### Stopping the stack
+
 ```bash
 docker compose down
 ```
@@ -87,36 +95,47 @@ docker compose down
 ---
 
 ## Environment Variables
+
 ### Backend (`services.backend.environment`)
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Port for the Go HTTP server. | `8080` |
-| `ALLOWED_ORIGINS` | Comma‑separated list of origins allowed for WebSocket connections. Must include your development host (e.g., `http://localhost:3000`). | See `docker-compose.yml` – includes common localhost origins and `${DOMAIN}` fallback |
-| `STOCKFISH_PATH` | Path to the Stockfish binary inside the container. | `/usr/games/stockfish` |
-| `MAX_ACTIVE_AI_ROOMS` | Maximum concurrent rooms with AI opponents. | `10` |
-| `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | Simple rate‑limiting for API endpoints. | `20` / `40` |
+
+| Variable                              | Description                                                                                                                            | Default                                                                               |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `PORT`                                | Port for the Go HTTP server.                                                                                                           | `8080`                                                                                |
+| `ALLOWED_ORIGINS`                     | Comma‑separated list of origins allowed for WebSocket connections. Must include your development host (e.g., `http://localhost:3000`). | See `docker-compose.yml` – includes common localhost origins and `${DOMAIN}` fallback |
+| `STOCKFISH_PATH`                      | Path to the Stockfish binary inside the container.                                                                                     | `/usr/games/stockfish`                                                                |
+| `MAX_ACTIVE_AI_ROOMS`                 | Maximum concurrent rooms with AI opponents.                                                                                            | `10`                                                                                  |
+| `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | Simple rate‑limiting for API endpoints.                                                                                                | `20` / `40`                                                                           |
 
 ### Frontend (`services.frontend.build.args`)
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `NEXT_PUBLIC_HTTP_BACKEND_URL` | Base URL for the REST API (e.g., `http://localhost:8082`). | *empty – Caddy proxies automatically* |
-| `NEXT_PUBLIC_WS_BACKEND_URL` | Base URL for the WebSocket endpoint (e.g., `ws://localhost:8082`). | *empty – Caddy proxies automatically* |
+
+| Variable                       | Description                                                        | Default                               |
+| ------------------------------ | ------------------------------------------------------------------ | ------------------------------------- |
+| `NEXT_PUBLIC_HTTP_BACKEND_URL` | Base URL for the REST API (e.g., `http://localhost:8082`).         | _empty – Caddy proxies automatically_ |
+| `NEXT_PUBLIC_WS_BACKEND_URL`   | Base URL for the WebSocket endpoint (e.g., `ws://localhost:8082`). | _empty – Caddy proxies automatically_ |
 
 > **Tip:** Create a `.env` file in the repository root with `VARIABLE=value` pairs; Docker Compose loads it automatically.
 
 ---
 
 ## Screenshots
-*(Add screenshots of the Chess board, Tic‑Tac‑Toe board, lobby, and mobile view here.)*
+
+|                  Chess Game                  |                    Tic-Tac-Toe Game                    |
+| :------------------------------------------: | :----------------------------------------------------: |
+| ![Chess](./docs/screenshots/chess-desk-view.png) | ![Tic-Tac-Toe](./docs/screenshots/tictactoe-mobile-view.png) |
+
+|                 Lobby                  |                  Register View                  |
+| :------------------------------------: | :-------------------------------------------: |
+| ![Lobby](./docs/screenshots/lobby.png) | ![Mobile](./docs/screenshots/register.png) |
 
 ---
 
 ## Cheatsheet – Common Commands
+
 ```bash
 # Rebuild containers after code changes
 docker compose up --build
 
-# Run only the backend (for fast Go tests)    
+# Run only the backend (for fast Go tests)
 cd server && go run ./cmd/main.go
 
 # View logs for a specific service
@@ -129,6 +148,7 @@ docker compose down -v
 ---
 
 ## Git Tag Instructions (v1.0.0)
+
 ```bash
 # Ensure you are on the commit you want to tag (e.g., main)
 git checkout main
@@ -140,13 +160,15 @@ git tag -a v1.0.0 -m "Portfolio Release – v1.0.0 – Multi‑Game Platform"
 
 git push origin v1.0.0
 ```
+
 The tag will appear in the repository’s releases page.
 
 ---
 
 ## License
+
 This project is licensed under the **MIT License** – see the `LICENSE` file for details.
 
 ---
 
-*Enjoy building and extending your real‑time multi‑game experiences!*
+_Enjoy building and extending your real‑time multi‑game experiences!_
