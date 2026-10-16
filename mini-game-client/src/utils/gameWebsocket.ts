@@ -1,9 +1,12 @@
 import useWebSocket, { ReadyState } from "react-use-websocket";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { showErrorAlert } from "./alerthelper";
-import { clearGameSession } from "./gameStorage";
-
-const backendUrl = process.env.NEXT_PUBLIC_WS_BACKEND_URL;
+import {
+  clearGameSession,
+  clearPlayerSession,
+  getPlayerSessionToken,
+} from "./gameStorage";
+import { getWsBackendUrl } from "./apiConfig";
 
 const EXPIRED_CLOSE_CODES = new Set([
   4001, // room expired
@@ -13,6 +16,7 @@ const REJECTED_CLOSE_CODES = new Set([
   4002, // room full
   4003, // invalid room
   4004, // player not found
+  4006, // unauthorized
 ]);
 
 const FATAL_CLOSE_CODES = new Set([
@@ -48,14 +52,19 @@ export const useGameWebSocket = (
   const hasOpenedRef = useRef(false);
 
   const socketUrl = useMemo(() => {
-    if (!backendUrl || !roomId || !playerId) return null;
+    const sessionToken = getPlayerSessionToken();
+    if (!roomId || !playerId || !sessionToken) return null;
+
+    const host = getWsBackendUrl();
+    if (!host) return null;
 
     const params = new URLSearchParams({
       room_id: roomId,
       player_id: playerId,
+      session_token: sessionToken,
     });
 
-    return `${backendUrl}/ws?${params.toString()}`;
+    return `${host}/ws?${params.toString()}`;
   }, [roomId, playerId]);
 
   const { sendMessage, lastMessage, readyState } = useWebSocket(
@@ -100,6 +109,7 @@ export const useGameWebSocket = (
         if (REJECTED_CLOSE_CODES.has(event.code)) {
           const reason = event.reason || "websocket rejected";
           setFatalSocketState("rejected");
+          if (event.code === 4006) clearPlayerSession();
           clearGameSession(gameType);
 
           options.onRejected?.(reason);
@@ -123,7 +133,7 @@ export const useGameWebSocket = (
         return true;
       },
 
-      reconnectAttempts: 10,
+      reconnectAttempts: 6,
 
       reconnectInterval: (attemptNumber) => {
         const delay = Math.min(attemptNumber * 1000, 10000);

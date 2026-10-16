@@ -3,10 +3,13 @@
 import axios from "axios";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  clearPlayerSession,
   clearGameSession,
+  getAuthorizationHeaders,
   getGameSession,
   saveGameSession,
 } from "./gameStorage";
+import { getHttpBackendUrl } from "./apiConfig";
 
 export type RoomSessionStatus =
   | "checking"
@@ -37,7 +40,7 @@ type RecoveryResponse = {
   };
 };
 
-const backendUrl = process.env.NEXT_PUBLIC_HTTP_BACKEND_URL;
+const backendUrl = getHttpBackendUrl();
 const recoveryRequests = new Map<string, Promise<RecoveryResponse>>();
 
 const recoverRoomSession = (recoveryKey: string, payload: unknown) => {
@@ -47,7 +50,9 @@ const recoverRoomSession = (recoveryKey: string, payload: unknown) => {
   }
 
   const request = axios
-    .post(`${backendUrl}/room/recover`, payload)
+    .post(`${backendUrl}/room/recover`, payload, {
+      headers: getAuthorizationHeaders(),
+    })
     .then((response) => response.data)
     .finally(() => {
       recoveryRequests.delete(recoveryKey);
@@ -65,6 +70,10 @@ const classifyRecoveryError = (error: unknown): RecoveryFailure => {
   const responseStatus = error.response?.status;
   const message =
     error.response?.data?.error || "Unable to recover room session";
+
+  if (responseStatus === 401) {
+    return { status: "invalid", message: "Session expired. Please register again." };
+  }
 
   if (responseStatus === 404 && message === "Room not found") {
     return { status: "expired", message };
@@ -104,10 +113,11 @@ export const useRoomSession = (gameType: GameType) => {
     const storedPlayerId = localStorage.getItem("playerId") || "";
     setPlayerId(storedPlayerId);
 
-    if (!storedPlayerId) {
+    if (!storedPlayerId || !getAuthorizationHeaders().Authorization) {
+      clearPlayerSession();
       clearGameSession(gameType);
       setStatus("invalid");
-      setError("Player ID not found");
+      setError("Player session not found");
       return;
     }
 
@@ -171,6 +181,7 @@ export const useRoomSession = (gameType: GameType) => {
         const failure = classifyRecoveryError(error);
 
         if (failure.status === "expired" || failure.status === "invalid") {
+          if (failure.status === "invalid") clearPlayerSession();
           clearGameSession(gameType);
         }
 

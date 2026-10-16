@@ -5,10 +5,6 @@ export default function playMoveSound(): void {
     if (playMove !== undefined) {
         playMove
             .then(() => {})
-            .catch((error: Error) => {
-                if (process.env.NODE_ENV === 'development') {
-                    console.log("Failed to load move sound", error);
-                }
-            });
+            .catch(() => {});
     }
 }

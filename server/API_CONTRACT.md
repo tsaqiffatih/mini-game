@@ -1,816 +1,224 @@
 # API Contract
 
-Strictly based on current codebase.
+_This contract is generated from the current Go source code in the `server/` package. It describes the public HTTP and WebSocket interfaces, request/response schemas, required headers, query parameters, and error handling._
 
-## Common HTTP Response
+---
 
-All HTTP handlers write JSON in this shape:
+## Common HTTP Response Envelope
 
-```json
-{
-  "success": true,
-  "data": {},
-  "error": null
-}
-```
-
-Error responses:
+All HTTP handlers return JSON wrapped in the following envelope:
 
 ```json
 {
-  "success": false,
-  "data": {},
-  "error": "message"
+  "success": true | false,
+  "data": <any>,
+  "error": null | "error message"
 }
 ```
 
-## HTTP API
+- **`success`** – `true` for successful requests, `false` otherwise.
+- **`data`** – The payload for successful requests (object, array, or `null`).
+- **`error`** – `null` on success; a string with a human‑readable error message on failure.
+
+### Standard HTTP Status Codes
+| Code | Meaning | When used |
+|------|---------|-----------|
+| `200 OK` | Success for GET/POST that return data. | Normal operation |
+| `201 Created` | Resource successfully created. | `POST /create/user`, `POST /room/create`, `POST /room/create/ai` |
+| `400 Bad Request` | Invalid JSON, missing required fields, or request validation failure. | Body parsing errors, unknown `game_type`, invalid `ai_level`, etc. |
+| `401 Unauthorized` | Missing or invalid `Authorization: Bearer <token>` header (REST) or invalid session token (WebSocket). |
+| `404 Not Found` | Player, room, or game type not found. |
+| `429 Too Many Requests` | Rate‑limiter triggered (middleware). |
+| `500 Internal Server Error` | Unexpected server error.
+
+---
+
+## HTTP Endpoints
 
 ### `GET /`
+- **Purpose**: Simple health / hello endpoint.
+- **Headers**: none.
+- **Response (200)**:
+  ```json
+  { "success": true, "data": null, "error": null }
+  ```
 
-Purpose: health/basic root response.
+### `GET /health` and `GET /healthz`
+- **Purpose**: Liveness/Readiness health check.
+- **Headers**: none.
+- **Response (200):**
+  ```json
+  { "success": true, "data": { "status": "ok" }, "error": null }
+  ```
 
-Request body: none.
-
-Response:
-
-```json
-{
-  "success": true,
-  "data": null,
-  "error": null
-}
-```
+---
 
 ### `POST /create/user`
+- **Purpose**: Register a new player (in‑memory).
+- **Headers**:
+  - `Content-Type: application/json`
+- **Request Body**:
+  ```json
+  { "player_id": "string" }
+  ```
+- **Success (201)** – `data` contains a `PlayerDTO`:
+  ```json
+  {
+    "id": "p1",
+    "player_id": "p1",
+    "mark": "",
+    "player_mark": "",
+    "is_ai": false,
+    "last_active": "2026-05-03T00:00:00Z",
+    "session": "disconnected"
+  }
+  ```
+- **Error (400)** – Invalid JSON or duplicate player.
 
-Purpose: create/register a player in memory.
-
-Request body:
-
-```json
-{
-  "player_id": "p1"
-}
-```
-
-Success status: `201`
-
-Success response `data`:
-
-```json
-{
-  "id": "p1",
-  "player_id": "p1",
-  "mark": "",
-  "player_mark": "",
-  "is_ai": false,
-  "last_active": "2026-05-03T00:00:00Z",
-  "session": "disconnected"
-}
-```
-
-Error status:
-- `400` for invalid JSON
-- `400` if player already exists
-
-Example error:
-
-```json
-{
-  "success": false,
-  "data": {},
-  "error": "player already exists, choose another name"
-}
-```
+---
 
 ### `POST /room/create`
+- **Purpose**: Create a new room and add the requesting player.
+- **Headers**:
+  - `Content-Type: application/json`
+  - `Authorization: Bearer <session_token>` – token obtained from `/create/user`.
+- **Request Body**:
+  ```json
+  { "game_type": "tictactoe" | "chess", "player_id": "string" }
+  ```
+- **Success (201)** – `data` is a `JoinRoomResponseDTO`:
+  ```json
+  { "player_id": "p1", "player_mark": "X", "room": { "id": "ABC1234", "room_id": "ABC1234" } }
+  ```
+- **Error Mapping** (via `createRoomStatus`):
+  - `404` – player not found (`service.ErrPlayerNotFound`).
+  - `400` – missing/invalid `game_type` (`service.ErrGameTypeRequired`).
+  - `503` – AI unavailable or max AI rooms reached (`game.ErrChessAIUnavailable`, `service.ErrMaxAIRoomsReached`).
+  - `400` – any other validation error.
 
-Purpose: create a room and add the requesting player.
-
-Request body:
-
-```json
-{
-  "game_type": "tictactoe",
-  "player_id": "p1"
-}
-```
-
-Implemented `game_type` values are determined by room creation code:
-- `"tictactoe"`
-- `"chess"`
-
-Success status: `201`
-
-Success response `data`:
-
-```json
-{
-  "player_id": "p1",
-  "player_mark": "X",
-  "room": {
-    "id": "ABC1234",
-    "room_id": "ABC1234"
-  }
-}
-```
-
-Error status:
-- `400` for invalid JSON
-- `400` if `game_type` is empty
-- `400` for unknown game type
-- `404` if player is not found
+---
 
 ### `POST /room/create/ai`
+- **Purpose**: Create a room with an AI opponent.
+- **Headers**: same as `/room/create`.
+- **Request Body**:
+  ```json
+  { "game_type": "tictactoe" | "chess", "player_id": "string", "ai_level": integer (optional) }
+  ```
+- **Success (201)** – Same payload as `/room/create`.
+- **Error Mapping** (via `createRoomStatus`):
+  - `404` – player not found.
+  - `400` – missing/invalid `game_type` or unsupported AI for the requested game.
+  - `503` – AI unavailable.
 
-Purpose: create an AI-enabled room and add the requesting player.
-
-Request body:
-
-```json
-{
-  "game_type": "tictactoe",
-  "player_id": "p1"
-}
-```
-
-Current code only supports AI for `"tictactoe"`.
-
-Success status: `201`
-
-Success response `data`:
-
-```json
-{
-  "player_id": "p1",
-  "player_mark": "X",
-  "room": {
-    "id": "ABC1234",
-    "room_id": "ABC1234"
-  }
-}
-```
-
-Error status:
-- `400` for invalid JSON
-- `400` if `game_type` is empty
-- `400` if AI is requested for unsupported game type
-- `404` if player is not found
+---
 
 ### `POST /room/join`
+- **Purpose**: Join an existing room.
+- **Headers**: same as `/room/create`.
+- **Request Body**:
+  ```json
+  { "room_id": "ABC1234", "player_id": "string", "game_type": "tictactoe" | "chess" }
+  ```
+- **Success (200)** – `JoinRoomResponseDTO` (same shape as room creation).
+- **Error Mapping** (via `joinRoomStatus`):
+  - `400` – game type mismatch (`service.ErrGameTypeMismatch`).
+  - `404` – player not found (`service.ErrPlayerNotFound`).
+  - `400` – invalid room state (`game.ErrInvalidGameState`).
+  - `404` – generic not‑found for other join failures.
 
-Purpose: join an existing room.
+---
 
-Request body:
-
-```json
-{
-  "room_id": "ABC1234",
-  "player_id": "p2",
-  "game_type": "tictactoe"
-}
-```
-
-Success status: `200`
-
-Success response `data`:
-
-```json
-{
-  "player_id": "p2",
-  "player_mark": "O",
-  "room": {
-    "id": "ABC1234",
-    "room_id": "ABC1234"
+### `POST /room/recover`
+- **Purpose**: Re‑establish a session after a disconnect (client‑side reconnection).
+- **Headers**: same as `/room/create`.
+- **Request Body**:
+  ```json
+  { "room_id": "ABC1234", "player_id": "string", "game_type": "tictactoe" | "chess" }
+  ```
+- **Success (200)** – Returns the player snapshot and full room snapshot:
+  ```json
+  {
+    "player_id": "p1",
+    "player_mark": "X",
+    "room": { ...RoomSnapshotDTO... }
   }
-}
+  ```
+- **Error Mapping** (via `recoverRoomStatus`):
+  - `400` – missing/invalid fields or game‑type mismatch.
+  - `404` – player or room not found (`service.ErrPlayerNotFound`, `service.ErrRoomNotFound`).
+
+---
+
+## WebSocket API
+
+### Connection URL
 ```
-
-Error status:
-- `400` for invalid JSON
-- `400` if game type does not match room game type
-- `400` for invalid game state
-- `404` if player is not found
-- `404` for other join errors, including missing room
-
-## WebSocket Contract
-
-### Connection
-
-Path:
-
-```text
-/ws?room_id=ABC1234&player_id=p1
+/ws?room_id=<ROOM_ID>&player_id=<PLAYER_ID>&session_token=<TOKEN>
 ```
+- **`room_id`** – Required, must match the pattern `^[A-Z0-9]{7}$` (validated by `validRoomID`).
+- **`player_id`** – Required, must correspond to a player that already exists in the room.
+- **`session_token`** – The session token obtained when the player was created (`/create/user`). It is verified by `middleware.VerifySessionToken`.
+- **Headers**: `Authorization: Bearer <session_token>` is optional for the WebSocket upgrade; the token is provided via query param.
+- **Upgrade Errors** – If validation fails, the server returns a normal HTTP envelope with the appropriate status (e.g., `400` or `401`). On successful upgrade the client is attached and receives the initial `room_update` plus chat history.
 
-Connection requirements:
-- `room_id` query parameter is required.
-- `player_id` query parameter is required.
-- Player must already exist in the room.
-- If validation fails before upgrade, the server returns the normal HTTP response envelope.
-
-On successful connection:
-- Client is attached by `player_id`.
-- Player is marked connected.
-- Server sends/broadcasts room events described below.
-- Server starts a write pump for outbound events.
-- Server reads inbound JSON WebSocket messages.
-
-### Client-to-Server Message Format
-
+### Message Envelope (both inbound and outbound)
 ```json
-{
-  "type": "EVENT_TYPE",
-  "payload": {}
-}
+{ "type": "EVENT_TYPE", "payload": { ... } }
 ```
-
-The server dispatches only these inbound message types:
-
-## Inbound WebSocket Events
-
-### `TICTACTOE_MOVE`
-
-When used: submit a TicTacToe move.
-
-Payload structure:
-
-```json
-{
-  "room_id": "ABC1234",
-  "player_id": "p1",
-  "row": 0,
-  "col": 0
-}
-```
-
-Important current behavior:
-- The handler uses the room and player from the WebSocket connection, not the payload `room_id` / `player_id`, when applying the move.
-- `row` and `col` are used.
-
-On success:
-- Server sends `game_update`.
-
-On failure:
-- Server sends `chess_move_rejected`.
-
-### `CHESS_UNDO_REQUEST`
-
-When used: request authoritative rollback in an AI chess room.
-
-Payload structure:
-
-```json
-{
-  "mode": "last_turn"
-}
-```
-
-Current behavior:
-- Supported for AI chess rooms.
-- The server rolls back the last human turn. If the latest move is an AI response, the AI move and the preceding human move are both rolled back.
-- Pending AI moves are cancelled before rollback.
-
-On success:
-- Server sends `game_update`.
-
-On failure:
-- Server sends `error`.
-
-### `CHESS_MOVE`
-
-When used: submit a chess move.
-
-Payload structure:
-
-```json
-{
-  "from": "e2",
-  "to": "e4",
-  "promotion": ""
-}
-```
-
-`promotion` is omitted when empty.
-
-On success:
-- Server sends `game_update`.
-
-On failure:
-- Server sends `error`.
-
-### `CREATE_ROOM_WITH_AI`
-
-When used: create an AI TicTacToe room by explicit room ID.
-
-Payload structure:
-
-```json
-"ABC1234"
-```
-
-The payload is a JSON string, not an object.
-
-Current behavior:
-- Game type is hardcoded to `"tictactoe"` in this WebSocket path.
-
-On success:
-- Server sends `room_update`.
-
-On failure:
-- Server sends `error`.
-
-## Server-to-Client Message Format
-
-```json
-{
-  "type": "EVENT_TYPE",
-  "payload": {}
-}
-```
-
-## Outbound WebSocket Events
-
-### `room_update`
-
-Sent when:
-- A client connects, directly to that client with the current room snapshot.
-- `CREATE_ROOM_WITH_AI` succeeds.
-
-Canonical payload shape:
-
-```json
-{
-  "id": "ABC1234",
-  "room_id": "ABC1234",
-  "state_version": 1,
-  "game_type": "tictactoe",
-  "state": "WAITING",
-  "room_state": "WAITING",
-  "is_active": false,
-  "is_ai_enabled": false,
-  "players": [],
-  "game": {
-    "type": "tictactoe",
-    "tictactoe": {}
-  },
-  "tictactoe": {}
-}
-```
-
-`room_update` always carries the direct `RoomSnapshotDTO`. It is not wrapped in `{ "room": ..., "data": ... }`.
-
-### `game_update`
-
-Sent when:
-- A TicTacToe move succeeds.
-- A chess move succeeds.
-
-Payload structure:
-
-```json
-{
-  "id": "ABC1234",
-  "room_id": "ABC1234",
-  "game_type": "tictactoe",
-  "state": "PLAYING",
-  "room_state": "PLAYING",
-  "is_active": true,
-  "is_ai_enabled": false,
-  "players": [],
-  "game": {
-    "type": "tictactoe",
-    "tictactoe": {}
-  },
-  "tictactoe": {}
-}
-```
-
-For chess rooms, `game.chess` is the canonical chess state source.
-
-The top-level `chess` field is a deprecated compatibility alias populated with the same state for older clients. New frontend code should read `payload.game.chess` and treat `payload.chess` as temporary migration support.
-
-Chess rooms include backward-compatible fields plus schema v2 metadata:
-
-```json
-{
-  "id": "ABC1234",
-  "room_id": "ABC1234",
-  "state_version": 7,
-  "game_type": "chess",
-  "state": "PLAYING",
-  "room_state": "PLAYING",
-  "is_active": true,
-  "is_ai_enabled": true,
-  "ai_level": 6,
-  "players": [],
-  "game": {
-    "type": "chess",
-    "chess": {
-      "schema_version": 2,
-      "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
-      "is_active": true,
-      "winner": "",
-      "pgn_moves": ["e4"],
-      "turn": "black",
-      "status": "active",
-      "ply": 1,
-      "fullmove_number": 1,
-      "last_move": {
-        "id": "1",
-        "ply": 1,
-        "move_number": 1,
-        "actor": {
-          "player_id": "p1",
-          "color": "white",
-          "is_ai": false
-        },
-        "from": "e2",
-        "to": "e4",
-        "uci": "e2e4",
-        "san": "e4",
-        "piece": {
-          "type": "pawn",
-          "color": "white"
-        },
-        "flags": {
-          "capture": false,
-          "castle": false,
-          "kingside_castle": false,
-          "queenside_castle": false,
-          "en_passant": false,
-          "promotion": false,
-          "check": false,
-          "checkmate": false,
-          "stalemate": false,
-          "draw": false
-        },
-        "check": {
-          "is_check": false
-        },
-        "sound": "move",
-        "animation": {
-          "from": "e2",
-          "to": "e4"
-        },
-        "created_at": "2026-05-12T00:00:00Z"
-      },
-      "check": {
-        "is_check": false
-      },
-      "captured_pieces": {
-        "white": [],
-        "black": []
-      },
-      "legal_moves": {
-        "e7": ["e6", "e5"]
-      },
-      "ai": {
-        "enabled": true,
-        "thinking": true,
-        "player_id": "AI",
-        "color": "black",
-        "level": 6
-      },
-      "undo": {
-        "can_request": true,
-        "can_undo_now": true,
-        "last_undoable_ply": 1
-      }
-    }
-  },
-  "chess": {
-    "schema_version": 2,
-    "fen": "same state as game.chess",
-    "is_active": true,
-    "winner": "",
-    "pgn_moves": ["e4"],
-    "turn": "black",
-    "status": "active",
-    "ply": 1,
-    "fullmove_number": 1,
-    "check": {
-      "is_check": false
-    },
-    "captured_pieces": {
-      "white": [],
-      "black": []
-    },
-    "legal_moves": {
-      "e7": ["e6", "e5"]
-    },
-    "ai": {
-      "enabled": true,
-      "thinking": true,
-      "player_id": "AI",
-      "color": "black",
-      "level": 6
-    },
-    "undo": {
-      "can_request": true,
-      "can_undo_now": true,
-      "last_undoable_ply": 1
-    }
-  }
-}
-```
-
-Notes:
-- `payload.game.chess` is canonical for chess state.
-- `payload.chess` is deprecated and kept temporarily for compatibility.
-- Inside `ChessStateDTO`, `fen`, `is_active`, `winner`, and `pgn_moves` remain for backward compatibility.
-- Frontends should use `last_move`, `check`, `captured_pieces`, `legal_moves`, `ai`, and `undo` for UI semantics instead of parsing SAN/PGN.
-- `state_version` is monotonically increased by authoritative room state changes and can be used by clients to ignore stale updates.
-
-### `chess_move_rejected`
-
-Sent when:
-- A chess move fails validation.
-- A chess move payload is malformed or semantically invalid.
-
-Payload structure:
-
-```json
-{
-  "room_id": "ABC1234",
-  "player_id": "p1",
-  "attempted_move": {
-    "from": "e2",
-    "to": "e5",
-    "promotion": ""
-  },
-  "code": "illegal_move",
-  "message": "illegal move",
-  "sound": "illegal"
-}
-```
-
-Known `code` values:
-- `invalid_payload`
-- `not_your_turn`
-- `promotion_required`
-- `game_not_active`
-- `player_not_in_room`
-- `illegal_move`
-- `invalid_move`
-
-### `player_joined`
-
-Sent when:
-- A WebSocket client connects to a room.
-
-Payload structure:
-
-```json
-{
-  "room": {
-    "id": "ABC1234",
-    "room_id": "ABC1234",
-    "game_type": "tictactoe",
-    "state": "PLAYING",
-    "room_state": "PLAYING",
-    "is_active": true,
-    "is_ai_enabled": false,
-    "players": []
-  },
-  "data": {
-    "message": "Player p1 connected to room ABC1234",
-    "player": {
-      "id": "p1",
-      "player_id": "p1",
-      "mark": "X",
-      "player_mark": "X",
-      "is_ai": false,
-      "last_active": "2026-05-03T00:00:00Z",
-      "session": "connected"
-    },
-    "timestamp": "2026-05-03T00:00:00Z"
-  }
-}
-```
-
-### `player_left`
-
-Sent when:
-- WebSocket read loop ends and the client is removed from the registry.
-
-Payload structure:
-
-```json
-{
-  "room": {
-    "id": "ABC1234",
-    "room_id": "ABC1234",
-    "game_type": "tictactoe",
-    "state": "WAITING",
-    "room_state": "WAITING",
-    "is_active": false,
-    "is_ai_enabled": false,
-    "players": []
-  },
-  "data": {
-    "message": "Player p1 left the room",
-    "player": {
-      "id": "p1",
-      "player_id": "p1",
-      "mark": "X",
-      "player_mark": "X",
-      "is_ai": false,
-      "last_active": "2026-05-03T00:00:00Z",
-      "session": "connected"
-    },
-    "timestamp": "2026-05-03T00:00:00Z"
-  }
-}
-```
-
-### `error`
-
-Sent when:
-- WebSocket message JSON is invalid.
-- Non-chess payloads cannot be decoded.
-- Unsupported message type is received.
-- A generic/internal/unexpected action failure occurs.
-
-Illegal, invalid, or malformed chess move submissions use `chess_move_rejected` instead of `error`.
-
-Payload structure:
-
-```json
-{
-  "message": "Unsupported message type"
-}
-```
-
-## DTO Structures
-
-### `PlayerDTO`
-
-```json
-{
-  "id": "p1",
-  "player_id": "p1",
-  "mark": "X",
-  "player_mark": "X",
-  "is_ai": false,
-  "last_active": "2026-05-03T00:00:00Z",
-  "session": "connected"
-}
-```
-
-Session values in current code:
-- `"connected"`
-- `"disconnected"`
-- `"removed"`
-
-### `RoomDTO`
-
-```json
-{
-  "id": "ABC1234",
-  "room_id": "ABC1234"
-}
-```
-
-### `JoinRoomResponseDTO`
-
-```json
-{
-  "player_id": "p1",
-  "player_mark": "X",
-  "room": {
-    "id": "ABC1234",
-    "room_id": "ABC1234"
-  }
-}
-```
-
-### `RoomSnapshotDTO`
-
-```json
-{
-  "id": "ABC1234",
-  "room_id": "ABC1234",
-  "state_version": 7,
-  "game_type": "tictactoe",
-  "state": "PLAYING",
-  "room_state": "PLAYING",
-  "is_active": true,
-  "is_ai_enabled": false,
-  "players": [],
-  "game": {
-    "type": "tictactoe",
-    "tictactoe": {}
-  },
-  "tictactoe": {}
-}
-```
-
-Room state values in current code:
-- `"WAITING"`
-- `"PLAYING"`
-- `"FINISHED"`
-- `"RESETTING"`
-
-### `GameStateDTO`
-
-```json
-{
-  "type": "chess",
-  "chess": {}
-}
-```
-
-Only the matching game state is populated for the room game type.
-For chess rooms, `game.chess` is canonical.
-
-### `TicTacToeStateDTO`
-
-```json
-{
-  "board": [
-    ["X", "", ""],
-    ["", "O", ""],
-    ["", "", ""]
-  ],
-  "turn": "X",
-  "winner": "",
-  "status": "active",
-  "is_active": true
-}
-```
-
-TicTacToe status values in current code:
-- `"waiting"`
-- `"active"`
-- `"ended"`
-
-Winner values:
-- Player mark, e.g. `"X"` or `"O"`
-- `"Draw"`
-- Empty string when no winner exists
-
-### `ChessStateDTO`
-
-```json
-{
-  "schema_version": 2,
-  "fen": "current FEN string",
-  "is_active": true,
-  "winner": "",
-  "pgn_moves": [],
-  "turn": "white",
-  "status": "active",
-  "result": "",
-  "ply": 0,
-  "fullmove_number": 1,
-  "last_move": null,
-  "check": {
-    "is_check": false
-  },
-  "captured_pieces": {
-    "white": [],
-    "black": []
-  },
-  "legal_moves": {},
-  "ai": {
-    "enabled": false,
-    "thinking": false,
-    "level": 10
-  },
-  "undo": {
-    "can_request": false,
-    "can_undo_now": false,
-    "last_undoable_ply": 0
-  }
-}
-```
-
-Chess state fields are taken from the current chess game state. `schema_version`, move metadata, check state, captured pieces, legal moves, AI state, and undo state are part of the current websocket contract.
-
-## State Version and Stale Updates
-
-`state_version` is the authoritative monotonic version for a room snapshot.
-
-It increments after authoritative state mutations clients should reconcile:
-- players joining or being removed
-- room lifecycle changes such as playing, finished, resetting, or waiting after reset
-- successful TicTacToe moves
-- successful chess moves
-- chess AI thinking state changes
-- chess AI moves
-- successful chess undo
-- scheduled resets
-
-It does not increment for rejected/no-op actions, invalid moves, chat messages, read activity updates, or player activity timestamps.
-
-Clients should track the latest `state_version` per `room_id` and ignore snapshots with a lower or equal version than the latest applied snapshot for that room. This is stale-update protection for delayed websocket delivery; it does not change the server-authoritative snapshot model.
-
-## Explicitly Unclear or Missing
-
-- There is no HTTP endpoint in the current router for fetching a room snapshot.
-- There is no HTTP endpoint in the current router for submitting a move.
-- WebSocket `TICTACTOE_MOVE` payload defines `room_id` and `player_id`, but the handler applies moves using the WebSocket connection’s room/player values.
-- WebSocket `CREATE_ROOM_WITH_AI` expects a raw JSON string payload; no object format is implemented.
-- Some constants exist in `actions/index.go` but are not handled by the current WebSocket dispatch logic. Only documented events above are actually dispatched or sent by the current code.
+- `type` – String identifying the event.
+- `payload` – Event‑specific JSON object (see tables below).
+
+### Inbound (Client → Server) Events
+| Type | Description | Payload Schema |
+|------|-------------|----------------|
+| `TICTACTOE_MOVE` | Submit a Tic‑Tac‑Toe move. | `TictactoeMovePayload` – `{ "room_id":"...", "player_id":"...", "row":0, "col":0 }` (room_id/player_id fields are ignored; the server uses the connection context). |
+| `CHESS_MOVE` | Submit a chess move. | `ChessMovePayload` – `{ "from":"e2", "to":"e4", "promotion":"" }` |
+| `CHESS_UNDO_REQUEST` | Request an undo of the last human turn in an AI chess room. | `ChessUndoPayload` – `{ "mode":"last_turn" }` (currently only `last_turn` supported). |
+| `CHAT_SEND` | Send a chat message to the room. | `ChatSendPayload` – `{ "message":"Hello" }` |
+| `CREATE_ROOM_WITH_AI` | Create an AI‑enabled Tic‑Tac‑Toe room with a specific ID (used by the client for deterministic room IDs). Payload is a raw JSON string containing the desired `room_id`. | `"ABC1234"` |
+
+### Outbound (Server → Client) Events
+| Type | Description | Payload Schema |
+|------|-------------|----------------|
+| `room_update` | Sent on connection, after successful `CREATE_ROOM_WITH_AI`, and when a player joins/leaves. Contains a full `RoomSnapshotDTO`. |
+| `game_update` | Broadcast after a successful move (Tic‑Tac‑Toe or chess) or after an undo. Contains a full `RoomSnapshotDTO`. |
+| `player_joined` | A player has connected to the room. Payload: `RoomEventPayload` with `room` (snapshot) and `data` containing a message and player info. |
+| `player_reconnecting` / `player_reconnected` | Client is reconnecting or has reconnected. Same payload shape as `player_joined`. |
+| `player_left` | Player has permanently left (after disconnect grace period). Payload similar to `player_joined`. |
+| `chat_message` | A new chat message has been posted. Payload: `ChatMessageDTO`. |
+| `chat_history` | Sent once after connection, contains all historic messages. Payload: `ChatHistoryDTO`. |
+| `error` | Generic error for malformed JSON, unsupported message type, etc. Payload: `{ "message": "..." }`. |
+| `chess_move_rejected` | Chess move validation failed. Payload: `ChessMoveRejectedDTO` – includes `room_id`, `player_id`, attempted move, error `code`, human‑readable `message`, and a `sound` hint. |
+
+### Error Codes for `chess_move_rejected`
+| Code | Meaning |
+|------|---------|
+| `invalid_payload` | JSON could not be parsed. |
+| `not_your_turn` | Player attempted to move out of turn. |
+| `promotion_required` | Pawn promotion required but not supplied. |
+| `game_not_active` | Move attempted on a finished or inactive game. |
+| `player_not_in_room` | Player not part of the room. |
+| `illegal_move` | Move violates chess rules. |
+| `invalid_move` | Generic fallback for other validation failures. |
+
+---
+
+## Rate Limiting
+The server applies a token‑bucket rate limiter (see `middleware/limitter.go`). Exceeding the limit returns **`429 Too Many Requests`** with the standard response envelope.
+
+---
+
+## DTO Reference (generated from `api/dto/*.go`)
+- **`PlayerDTO`** – fields: `id`, `player_id`, `mark`, `player_mark`, `is_ai`, `last_active`, `session`.
+- **`RoomDTO`** – `id`, `room_id`.
+- **`JoinRoomResponseDTO`** – `player_id`, `player_mark`, `room` (RoomDTO).
+- **`RoomSnapshotDTO`** – comprehensive snapshot including `id`, `room_id`, `state_version`, `game_type`, `state`, `room_state`, `is_active`, `is_ai_enabled`, `ai_level`, `players[]`, `game` (GameStateDTO), `tictactoe`, `chess` (deprecated alias).
+- **`GameStateDTO`** – `type` (`"tictactoe"` or `"chess"`), embeds the concrete game state DTO.
+- **`TicTacToeStateDTO`** – `board`, `turn`, `winner`, `status`, `is_active`.
+- **`ChessStateDTO`** – `schema_version`, `fen`, `is_active`, `winner`, `pgn_moves`, `turn`, `status`, `result`, `ply`, `fullmove_number`, `last_move`, `check`, `captured_pieces`, `legal_moves`, `ai` (ChessAIDTO), `undo` (ChessUndoDTO).
+- **`ChatMessageDTO`**, **`ChatHistoryDTO`**, **`ChessMoveRejectedDTO`**, etc.
+
+---
+
+*This contract should be kept in sync with the source code. Any change to request bodies, response structures, or event names must be reflected here.*

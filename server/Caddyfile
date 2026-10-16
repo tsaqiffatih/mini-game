@@ -1,4 +1,45 @@
-:80 {
-	reverse_proxy backend:8080
+{
+	admin off
 }
 
+{$DOMAIN::80} {
+	encode zstd gzip
+
+	# Security headers
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# WebSocket endpoint
+	@websocket {
+		path /ws*
+	}
+	reverse_proxy @websocket backend:8080 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Backend REST API endpoints
+	@backend_api {
+		path /health* /create/* /room/*
+	}
+	reverse_proxy @backend_api backend:8080 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Frontend Next.js app
+	reverse_proxy frontend:3000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

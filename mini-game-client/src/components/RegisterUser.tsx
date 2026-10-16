@@ -5,12 +5,17 @@ import Modal from "./Modal";
 import { showErrorAlert, showSuccessAlert } from "@/utils/alerthelper";
 import { useRouter } from "next/navigation";
 import axios from "axios";
+import { getHttpBackendUrl } from "@/utils/apiConfig";
 
 interface RegisterUserProps {
   onRegister: () => void;
 }
 
-const backendUrl = process.env.NEXT_PUBLIC_HTTP_BACKEND_URL;
+type CreateUserResponse = {
+  data: { player_id: string; session_token: string };
+};
+
+const backendUrl = getHttpBackendUrl();
 
 export default function RegisterUser({ onRegister }: RegisterUserProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -29,20 +34,24 @@ export default function RegisterUser({ onRegister }: RegisterUserProps) {
     e.preventDefault();
 
     try {
-      const { data } = await axios.post(`${backendUrl}/create/user`, {
-        player_id: formData.player_id,
-      });
+      const { data } = await axios.post<CreateUserResponse>(
+        `${backendUrl}/create/user`,
+        {
+          player_id: formData.player_id,
+        },
+      );
 
       const playerId = data?.data?.player_id;
 
       localStorage.setItem("playerId", playerId);
+      localStorage.setItem("sessionToken", data.data.session_token);
 
       await showSuccessAlert("Success Create Player");
 
       setIsModalOpen(false);
       onRegister();
       router.push("/");
-    } catch (error: any) {
+    } catch (error: unknown) {
       handleHttpError(error);
     }
   };

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"time"
 
@@ -134,7 +133,12 @@ func handleMessageAction(
 		NotifyToClientsInRoom(clients, gameService, event.RoomID, EventRoomUpdate, nil)
 	default:
 		sendErrorMessage(client, "Unsupported message type")
-		log.Println(message.Type, "<<<<<<<<<<<")
+		observability.Logger().WarnContext(ctx, "unsupported websocket message type",
+			"room_id", roomID,
+			"player_id", player.ID,
+			"event_type", "websocket_message_unsupported",
+			"message_type", message.Type,
+		)
 	}
 }
 
@@ -158,7 +162,7 @@ func notifyRoomOnConnection(ctx context.Context, clients *ClientRegistry, gameSe
 		return
 	}
 
-	sendRoomSnapshotToClient(clientForPlayer(clients, player.ID), snapshot)
+	sendRoomSnapshotToClient(clientForPlayer(clients, roomID, player.ID), snapshot)
 	sendChatHistoryToClient(ctx, clients, gameService, roomID, player.ID)
 }
 
@@ -232,7 +236,7 @@ func processChatSend(
 }
 
 func sendChatHistoryToClient(ctx context.Context, clients *ClientRegistry, gameService *service.GameService, roomID string, playerID string) {
-	client := clientForPlayer(clients, playerID)
+	client := clientForPlayer(clients, roomID, playerID)
 	if client == nil {
 		return
 	}
@@ -308,7 +312,7 @@ func NotifySnapshotToClients(clients *ClientRegistry, snapshot game.RoomSnapshot
 		}
 
 		for _, player := range snapshot.Players {
-			client, connected := clients.Get(player.ID)
+			client, connected := clients.Get(snapshot.RoomID, player.ID)
 			if !connected {
 				continue
 			}
@@ -376,8 +380,8 @@ func marshalPayload(payload interface{}) json.RawMessage {
 	return payloadBytes
 }
 
-func clientForPlayer(clients *ClientRegistry, playerID string) *Client {
-	client, connected := clients.Get(playerID)
+func clientForPlayer(clients *ClientRegistry, roomID string, playerID string) *Client {
+	client, connected := clients.Get(roomID, playerID)
 	if !connected {
 		return nil
 	}

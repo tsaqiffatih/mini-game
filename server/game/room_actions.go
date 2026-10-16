@@ -524,7 +524,7 @@ func (r *Room) EnableAILevel(aiLevel int) error {
 		aiPlayer.Mark = "black"
 		engine, err := NewStockfishEngine(stockfishPathFromEnv(), r.aiLevel)
 		if err != nil {
-			return err
+			return ErrChessAIUnavailable
 		}
 		r.stockfish = engine
 	}

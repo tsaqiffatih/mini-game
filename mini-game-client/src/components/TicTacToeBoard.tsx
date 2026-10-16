@@ -198,7 +198,7 @@ export default function TicTacToeBoard({
               map.set(m.id, {
                 id: m.id,
                 sender: "sender" in m ? m.sender : m.player_id,
-                playerMark: "playerMark" in m ? m.playerMark : m.player_mark,
+                playerMark: "player_id" in m ? m.player_mark : m.playerMark,
                 message: m.message,
                 timestamp: "timestamp" in m ? m.timestamp : m.created_at,
               });

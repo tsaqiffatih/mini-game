@@ -1,12 +1,16 @@
 "use client";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState } from "react";
 import axios from "axios";
 import { showErrorAlert } from "@/utils/alerthelper";
 import { useRouter } from "next/navigation";
 import AIDifficultyModal from "./AIDifficultyModal";
-import { saveGameSession } from "@/utils/gameStorage";
+import {
+  clearPlayerSession,
+  getAuthorizationHeaders,
+  saveGameSession,
+} from "@/utils/gameStorage";
+import { getHttpBackendUrl } from "@/utils/apiConfig";
 
 type GameType = "chess" | "tictactoe";
 interface LobbyProps {
@@ -15,7 +19,7 @@ interface LobbyProps {
   onRoomReady: (roomId: string, playerMark: string) => void;
 }
 
-const backendUrl = process.env.NEXT_PUBLIC_HTTP_BACKEND_URL;
+const backendUrl = getHttpBackendUrl();
 
 export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
   const [isLoadingNewGame, setIsLoadingNewGame] = useState(false);
@@ -35,11 +39,11 @@ export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
     setIsLoadingNewGame(true);
 
     try {
-      const { data } = await axios.post(`${backendUrl}/room/create/ai`, {
-        game_type: gameType,
-        player_id: playerId,
-        ai_level: aiLevel,
-      });
+      const { data } = await axios.post(
+        `${backendUrl}/room/create/ai`,
+        { game_type: gameType, player_id: playerId, ai_level: aiLevel },
+        { headers: getAuthorizationHeaders() },
+      );
 
       const newRoomId = data?.data?.room?.room_id;
       const playerMark = data?.data?.player_mark;
@@ -57,7 +61,7 @@ export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
 
       setIsAIModalOpen(false);
       onRoomReady(newRoomId, playerMark);
-    } catch (error: any) {
+    } catch (error: unknown) {
       handleHttpError(error);
     } finally {
       setIsLoadingNewGame(false);
@@ -68,10 +72,11 @@ export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
     setIsLoadingNewGame(true);
 
     try {
-      const { data } = await axios.post(`${backendUrl}/room/create`, {
-        game_type: gameType,
-        player_id: playerId,
-      });
+      const { data } = await axios.post(
+        `${backendUrl}/room/create`,
+        { game_type: gameType, player_id: playerId },
+        { headers: getAuthorizationHeaders() },
+      );
 
       const newRoomId = data?.data?.room?.room_id;
       const playerMark = data?.data?.player_mark;
@@ -87,9 +92,7 @@ export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
       });
 
       onRoomReady(newRoomId, playerMark);
-    } catch (error: any) {
-      console.log(error.response.data.error, "<<<<<");
-
+    } catch (error: unknown) {
       handleHttpError(error);
     } finally {
       setIsLoadingNewGame(false);
@@ -100,11 +103,11 @@ export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
     setIsLoadingJoinGame(true);
 
     try {
-      const { data } = await axios.post(`${backendUrl}/room/join`, {
-        room_id: roomId,
-        player_id: playerId,
-        game_type: gameType,
-      });
+      const { data } = await axios.post(
+        `${backendUrl}/room/join`,
+        { room_id: roomId, player_id: playerId, game_type: gameType },
+        { headers: getAuthorizationHeaders() },
+      );
 
       const newRoomId = data?.data?.room?.room_id;
       const playerMark = data?.data?.player_mark;
@@ -116,21 +119,30 @@ export default function Lobby({ gameType, playerId, onRoomReady }: LobbyProps) {
       });
 
       onRoomReady(newRoomId, playerMark);
-    } catch (error: any) {
+    } catch (error: unknown) {
       handleHttpError(error);
     } finally {
       setIsLoadingJoinGame(false);
     }
   };
 
-  const handleHttpError = (error: any) => {
-    const msg = error?.response?.data?.error;
+  const handleHttpError = (error: unknown) => {
+    const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+    const msg = axios.isAxiosError(error) ? error.response?.data?.error : undefined;
+
+    if (status === 401) {
+      clearPlayerSession();
+      showErrorAlert("Session expired. Please register again.").then(() =>
+        router.push("/"),
+      );
+      return;
+    }
 
     switch (msg) {
       case "Player not found":
         // showErrorAlert("Player not found. Please register first.");
 
-        localStorage.removeItem("playerId");
+        clearPlayerSession();
 
         window.location.reload();
 

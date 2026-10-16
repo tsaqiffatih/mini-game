@@ -3,13 +3,17 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/tsaqiffatih/mini-game/api/dto"
 	"github.com/tsaqiffatih/mini-game/game"
 	"github.com/tsaqiffatih/mini-game/internal/observability"
 	"github.com/tsaqiffatih/mini-game/service"
+
 )
 
 type Response struct {
@@ -20,6 +24,8 @@ type Response struct {
 }
 
 func RegisterRouter(r *mux.Router, clients *ClientRegistry, gameService *service.GameService) {
+	r.HandleFunc("/health", health).Methods(http.MethodGet)
+	r.HandleFunc("/healthz", health).Methods(http.MethodGet)
 	r.HandleFunc("/create/user", func(w http.ResponseWriter, r *http.Request) {
 		addPlayer(w, r, gameService)
 	}).Methods("POST")
@@ -53,8 +59,12 @@ func createRoom(w http.ResponseWriter, r *http.Request, gameService *service.Gam
 		PlayerID string `json:"player_id"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeRequestBody(w, r, &request); err != nil {
 		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	if !authenticateHTTPPlayer(w, r, gameService, request.PlayerID) {
 		return
 	}
 
@@ -72,15 +82,27 @@ func createRoomWithAi(w http.ResponseWriter, r *http.Request, gameService *servi
 	var request struct {
 		GameType string `json:"game_type"`
 		PlayerID string `json:"player_id"`
-		AILevel  int    `json:"ai_level,omitempty"`
+		AILevel  *int   `json:"ai_level,omitempty"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeRequestBody(w, r, &request); err != nil {
 		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
-	res, err := gameService.CreateRoomWithAILevelWithContext(r.Context(), request.GameType, request.PlayerID, request.AILevel)
+	if !authenticateHTTPPlayer(w, r, gameService, request.PlayerID) {
+		return
+	}
+	aiLevel := game.DefaultAILevel
+	if request.AILevel != nil {
+		aiLevel = *request.AILevel
+	}
+	if !game.ValidAILevel(aiLevel) {
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	res, err := gameService.CreateRoomWithAILevelWithContext(r.Context(), request.GameType, request.PlayerID, aiLevel)
 	if err != nil {
 		writeErrorResponse(w, createRoomStatus(err), err.Error())
 		return
@@ -97,8 +119,17 @@ func joinRoom(w http.ResponseWriter, r *http.Request, gameService *service.GameS
 		GameType string `json:"game_type"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeRequestBody(w, r, &request); err != nil {
 		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	if !validRoomID(request.RoomID) {
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	if !authenticateHTTPPlayer(w, r, gameService, request.PlayerID) {
 		return
 	}
 
@@ -118,8 +149,17 @@ func recoverRoom(w http.ResponseWriter, r *http.Request, gameService *service.Ga
 		GameType string `json:"game_type"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeRequestBody(w, r, &request); err != nil {
 		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	if !validRoomID(request.RoomID) {
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+
+	if !authenticateHTTPPlayer(w, r, gameService, request.PlayerID) {
 		return
 	}
 
@@ -165,7 +205,7 @@ func addPlayer(w http.ResponseWriter, r *http.Request, gameService *service.Game
 		PlayerID string `json:"player_id"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeRequestBody(w, r, &request); err != nil {
 		writeErrorResponse(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
@@ -176,7 +216,69 @@ func addPlayer(w http.ResponseWriter, r *http.Request, gameService *service.Game
 		return
 	}
 
-	writeSuccessResponse(w, http.StatusCreated, dto.FromPlayerSnapshot(player))
+	sessionToken, err := gameService.SessionTokenForPlayer(player.ID)
+	if err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Unable to create player")
+		return
+	}
+
+	writeSuccessResponse(w, http.StatusCreated, struct {
+		dto.PlayerDTO
+		SessionToken string `json:"session_token"`
+	}{
+		PlayerDTO:    dto.FromPlayerSnapshot(player),
+		SessionToken: sessionToken,
+	})
+}
+
+const maxHTTPRequestBodyBytes int64 = 1 << 20
+
+var roomIDPattern = regexp.MustCompile(`^[A-Z0-9]{7}$`)
+
+func decodeRequestBody(w http.ResponseWriter, r *http.Request, destination interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxHTTPRequestBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("request body must contain one JSON value")
+	}
+	return nil
+}
+
+func health(w http.ResponseWriter, _ *http.Request) {
+	writeSuccessResponse(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func validRoomID(roomID string) bool {
+	return roomIDPattern.MatchString(roomID)
+}
+
+func authenticateHTTPPlayer(w http.ResponseWriter, r *http.Request, gameService *service.GameService, playerID string) bool {
+	token, ok := bearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		writeErrorResponse(w, http.StatusUnauthorized, "Unauthorized")
+		return false
+	}
+
+	if _, err := gameService.AuthenticatePlayer(playerID, token); err != nil {
+		writeErrorResponse(w, http.StatusUnauthorized, "Unauthorized")
+		return false
+	}
+
+	return true
+}
+
+func bearerToken(header string) (string, bool) {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) {
+		return "", false
+	}
+
+	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
+	return token, token != ""
 }
 
 func writeSuccessResponse(w http.ResponseWriter, statusCode int, data interface{}) {
@@ -202,11 +304,13 @@ func writeJSONResponse(w http.ResponseWriter, statusCode int, response Response)
 }
 
 func createRoomStatus(err error) int {
-	switch err {
-	case service.ErrPlayerNotFound:
+	switch {
+	case errors.Is(err, service.ErrPlayerNotFound):
 		return http.StatusNotFound
-	case service.ErrGameTypeRequired:
+	case errors.Is(err, service.ErrGameTypeRequired):
 		return http.StatusBadRequest
+	case errors.Is(err, game.ErrChessAIUnavailable), errors.Is(err, service.ErrMaxAIRoomsReached):
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusBadRequest
 	}

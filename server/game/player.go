@@ -2,12 +2,21 @@ package game
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tsaqiffatih/mini-game/internal/observability"
 )
+
+const maxPlayerIDRunes = 32
+
+var ErrInvalidPlayerID = errors.New("invalid player ID")
 
 type PlayerSessionStatus string
 
@@ -18,11 +27,12 @@ const (
 )
 
 type Player struct {
-	ID         string `json:"player_id"`
-	Mark       string `json:"player_mark"`
-	IsAI       bool   `json:"is_ai"`
-	LastActive time.Time
-	Session    PlayerSessionStatus
+	ID           string `json:"player_id"`
+	Mark         string `json:"player_mark"`
+	IsAI         bool   `json:"is_ai"`
+	LastActive   time.Time
+	Session      PlayerSessionStatus
+	SessionToken string
 }
 
 type PlayerManager struct {
@@ -70,6 +80,19 @@ func (pm *PlayerManager) RemoveInactivePlayers(ctx context.Context, duration, ti
 // AddPlayer adds a new player to the manager.
 // Returns an error if the player already exists.
 func (pm *PlayerManager) AddPlayer(playerID string) (PlayerSnapshot, error) {
+	if !validPlayerID(playerID) {
+		return PlayerSnapshot{}, ErrInvalidPlayerID
+	}
+
+	sessionToken, err := generateSessionToken()
+	if err != nil {
+		return PlayerSnapshot{}, err
+	}
+
+	return pm.addPlayer(playerID, sessionToken)
+}
+
+func (pm *PlayerManager) addPlayer(playerID string, sessionToken string) (PlayerSnapshot, error) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -79,9 +102,10 @@ func (pm *PlayerManager) AddPlayer(playerID string) (PlayerSnapshot, error) {
 	}
 
 	player := &Player{
-		ID:         playerID,
-		LastActive: time.Now(),
-		Session:    PlayerSessionDisconnected,
+		ID:           playerID,
+		LastActive:   time.Now(),
+		Session:      PlayerSessionDisconnected,
+		SessionToken: sessionToken,
 	}
 	pm.players[playerID] = player
 	return playerSnapshot(player), nil
@@ -98,6 +122,33 @@ func (pm *PlayerManager) GetPlayer(playerID string) (PlayerSnapshot, error) {
 		return PlayerSnapshot{}, errors.New("player not found")
 	}
 	return playerSnapshot(player), nil
+}
+
+// AuthenticatePlayer verifies that a session token belongs to the requested player.
+func (pm *PlayerManager) AuthenticatePlayer(playerID string, sessionToken string) (PlayerSnapshot, bool) {
+	if sessionToken == "" {
+		return PlayerSnapshot{}, false
+	}
+
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	player, exists := pm.players[playerID]
+	if !exists || subtle.ConstantTimeCompare([]byte(player.SessionToken), []byte(sessionToken)) != 1 {
+		return PlayerSnapshot{}, false
+	}
+
+	return playerSnapshot(player), true
+}
+
+func (pm *PlayerManager) SessionTokenForPlayer(playerID string) (string, bool) {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	player, exists := pm.players[playerID]
+	if !exists {
+		return "", false
+	}
+	return player.SessionToken, true
 }
 
 // RemovePlayer removes a player by their ID.
@@ -130,4 +181,28 @@ func playerSnapshot(player *Player) PlayerSnapshot {
 		LastActive: player.LastActive,
 		Session:    player.Session,
 	}
+}
+
+func validPlayerID(playerID string) bool {
+	trimmed := strings.TrimSpace(playerID)
+	if trimmed == "" || utf8.RuneCountInString(trimmed) > maxPlayerIDRunes {
+		return false
+	}
+	for _, r := range trimmed {
+		if r < 32 || r == 127 {
+			return false
+		}
+	}
+	return true
+}
+
+func generateSessionToken() (string, error) {
+	const tokenBytes = 32
+
+	bytes := make([]byte, tokenBytes)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+
+	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }

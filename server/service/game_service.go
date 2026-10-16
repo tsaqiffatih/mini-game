@@ -2,25 +2,29 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
-	"math/rand"
-	"sync"
+	"math/big"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/tsaqiffatih/mini-game/game"
 	"github.com/tsaqiffatih/mini-game/internal/observability"
 )
 
-var (
-	ErrGameTypeRequired = errors.New("RoomID and GameType are required")
-	ErrPlayerNotFound   = errors.New("Player not found")
-	ErrRoomNotFound     = errors.New("Room not found")
-	ErrGameTypeMismatch = errors.New("Game type not match")
+const (
+	DefaultMaxAIRooms             = 10
+	maxRoomCodeGenerationAttempts = 5
 )
 
 var (
-	roomCodeRandMu sync.Mutex
-	roomCodeRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
+	ErrGameTypeRequired  = errors.New("RoomID and GameType are required")
+	ErrPlayerNotFound    = errors.New("Player not found")
+	ErrRoomNotFound      = errors.New("Room not found")
+	ErrGameTypeMismatch  = errors.New("Game type not match")
+	ErrUnauthorized      = errors.New("unauthorized")
+	ErrMaxAIRoomsReached = errors.New("maximum active AI rooms reached")
 )
 
 type RoomRepository interface {
@@ -35,16 +39,31 @@ type GameService struct {
 	playerManager *game.PlayerManager
 	ctx           context.Context
 	roomNotifier  func(game.RoomSnapshot)
+	maxAIRooms    int
 }
 
 func NewGameService(
 	rooms RoomRepository,
 	playerManager *game.PlayerManager,
 ) *GameService {
+	maxAI := DefaultMaxAIRooms
+	if envVal := os.Getenv("MAX_ACTIVE_AI_ROOMS"); envVal != "" {
+		if parsed, err := strconv.Atoi(envVal); err == nil && parsed > 0 {
+			maxAI = parsed
+		}
+	}
+
 	return &GameService{
 		rooms:         rooms,
 		playerManager: playerManager,
 		ctx:           context.Background(),
+		maxAIRooms:    maxAI,
+	}
+}
+
+func (s *GameService) SetMaxAIRooms(limit int) {
+	if limit > 0 {
+		s.maxAIRooms = limit
 	}
 }
 
@@ -82,6 +101,22 @@ func (s *GameService) AddPlayer(playerID string) (game.PlayerSnapshot, error) {
 	return s.playerManager.AddPlayer(playerID)
 }
 
+func (s *GameService) SessionTokenForPlayer(playerID string) (string, error) {
+	token, ok := s.playerManager.SessionTokenForPlayer(playerID)
+	if !ok {
+		return "", ErrPlayerNotFound
+	}
+	return token, nil
+}
+
+func (s *GameService) AuthenticatePlayer(playerID string, sessionToken string) (game.PlayerSnapshot, error) {
+	player, ok := s.playerManager.AuthenticatePlayer(playerID, sessionToken)
+	if !ok {
+		return game.PlayerSnapshot{}, ErrUnauthorized
+	}
+	return player, nil
+}
+
 func (s *GameService) CreateRoom(gameType string, playerID string) (*game.JoinRoomResponse, error) {
 	return s.CreateRoomWithContext(s.context(), gameType, playerID)
 }
@@ -102,27 +137,23 @@ func (s *GameService) CreateRoomWithContext(ctx context.Context, gameType string
 		return nil, ErrPlayerNotFound
 	}
 
-	roomID := generateRandomRoomCode()
-
-	room, err := game.NewRoom(roomID, gameType)
+	room, err := s.saveRoomWithUniqueCode(ctx, func(id string) (*game.Room, error) {
+		return game.NewRoom(id, gameType)
+	})
 	if err != nil {
-		spanErr = err
-		return nil, err
-	}
-	s.attachRoomNotifier(room)
-
-	if err := s.rooms.Save(ctx, room); err != nil {
 		spanErr = err
 		return nil, err
 	}
 
 	res, err := room.AddPlayer(player)
 	if err != nil {
+		room.Close()
+		_ = s.rooms.Delete(ctx, room.RoomID)
 		spanErr = err
 		return nil, err
 	}
 	observability.Logger().InfoContext(ctx, "room created",
-		"room_id", roomID,
+		"room_id", room.RoomID,
 		"player_id", playerID,
 		"event_type", "room_created",
 		"game_type", gameType,
@@ -154,17 +185,22 @@ func (s *GameService) CreateRoomWithAILevelWithContext(ctx context.Context, game
 		return nil, ErrPlayerNotFound
 	}
 
-	roomID := generateRandomRoomCode()
-
-	room, err := game.NewRoomWithAILevel(roomID, gameType, aiLevel)
-	if err != nil {
-		spanErr = err
-		return nil, err
+	if gameType == "chess" {
+		activeAI, err := s.activeChessAIRooms(ctx)
+		if err != nil {
+			spanErr = err
+			return nil, err
+		}
+		if activeAI >= s.maxAIRooms {
+			spanErr = ErrMaxAIRoomsReached
+			return nil, ErrMaxAIRoomsReached
+		}
 	}
-	s.attachRoomNotifier(room)
 
-	if err := s.rooms.Save(ctx, room); err != nil {
-		room.Close()
+	room, err := s.saveRoomWithUniqueCode(ctx, func(id string) (*game.Room, error) {
+		return game.NewRoomWithAILevel(id, gameType, aiLevel)
+	})
+	if err != nil {
 		spanErr = err
 		return nil, err
 	}
@@ -172,11 +208,12 @@ func (s *GameService) CreateRoomWithAILevelWithContext(ctx context.Context, game
 	res, err := room.AddPlayer(player)
 	if err != nil {
 		room.Close()
+		_ = s.rooms.Delete(ctx, room.RoomID)
 		spanErr = err
 		return nil, err
 	}
 	observability.Logger().InfoContext(ctx, "room created with ai",
-		"room_id", roomID,
+		"room_id", room.RoomID,
 		"player_id", playerID,
 		"event_type", "room_created",
 		"game_type", gameType,
@@ -184,6 +221,47 @@ func (s *GameService) CreateRoomWithAILevelWithContext(ctx context.Context, game
 		"ai_level", room.AILevel(),
 	)
 	return res, nil
+}
+
+func (s *GameService) saveRoomWithUniqueCode(ctx context.Context, newRoomFn func(string) (*game.Room, error)) (*game.Room, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxRoomCodeGenerationAttempts; attempt++ {
+		roomID, err := generateRandomRoomCode()
+		if err != nil {
+			return nil, err
+		}
+
+		room, err := newRoomFn(roomID)
+		if err != nil {
+			return nil, err
+		}
+		s.attachRoomNotifier(room)
+
+		if err := s.rooms.Save(ctx, room); err != nil {
+			room.Close()
+			lastErr = err
+			continue
+		}
+		return room, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New("failed to generate unique room code after retries")
+}
+
+func (s *GameService) activeChessAIRooms(ctx context.Context) (int, error) {
+	rooms, err := s.rooms.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, room := range rooms {
+		if room.IsAIEnabled() && room.GameType() == "chess" {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (s *GameService) JoinRoom(roomID string, playerID string, gameType string) (*game.JoinRoomResponse, error) {
@@ -686,16 +764,18 @@ func (s *GameService) HandleChessUndoWithContext(ctx context.Context, roomID str
 	return nil
 }
 
-func generateRandomRoomCode() string {
+func generateRandomRoomCode() (string, error) {
 	const possibleCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	gameCode := make([]byte, 7)
+	limit := big.NewInt(int64(len(possibleCharacters)))
 
-	roomCodeRandMu.Lock()
-	defer roomCodeRandMu.Unlock()
-	for i := 0; i < 7; i++ {
-		randomIndex := roomCodeRand.Intn(len(possibleCharacters))
-		gameCode[i] = possibleCharacters[randomIndex]
+	for i := range gameCode {
+		randomIndex, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			return "", err
+		}
+		gameCode[i] = possibleCharacters[randomIndex.Int64()]
 	}
 
-	return string(gameCode)
+	return string(gameCode), nil
 }

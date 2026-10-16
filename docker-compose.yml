@@ -1,0 +1,53 @@
+services:
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      ALLOWED_ORIGINS: "http://localhost,http://localhost:80,http://localhost:8082,http://localhost:3000,http://localhost:8080,http://localhost:8081,http://127.0.0.1,http://127.0.0.1:8082,http://127.0.0.1:3000,https://localhost:8082,https://127.0.0.1:8082,https://${DOMAIN:-localhost}"
+      STOCKFISH_PATH: "/usr/games/stockfish"
+      MAX_ACTIVE_AI_ROOMS: "10"
+      RATE_LIMIT_RPS: "20"
+      RATE_LIMIT_BURST: "40"
+    expose:
+      - "8080"
+    cpus: "0.75"
+    mem_limit: 512m
+
+  frontend:
+    build:
+      context: ./mini-game-client
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_HTTP_BACKEND_URL: "${NEXT_PUBLIC_HTTP_BACKEND_URL:-}"
+        NEXT_PUBLIC_WS_BACKEND_URL: "${NEXT_PUBLIC_WS_BACKEND_URL:-}"
+    restart: unless-stopped
+    expose:
+      - "3000"
+    cpus: "0.50"
+    mem_limit: 512m
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "8082:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: "${DOMAIN:-:80}"
+    volumes:
+      - ./server/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    cpus: "0.25"
+    mem_limit: 128m
+
+volumes:
+  caddy_data:
+  caddy_config:

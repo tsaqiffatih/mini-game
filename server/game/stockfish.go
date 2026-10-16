@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -123,9 +122,6 @@ func (e *StockfishEngine) BestMove(ctx context.Context, fen string) (string, str
 	if err := e.writeLine("position fen " + fen); err != nil {
 		return "", "", "", err
 	}
-	// if err := e.writeLine("go movetime " + strconv.Itoa(int(e.thinkTime.Milliseconds()))); err != nil {
-	// 	return "", "", "", err
-	// }
 
 	if err := e.writeLine(
 		"go depth " + strconv.Itoa(stockfishDepth(e.level)),
@@ -238,7 +234,6 @@ func stockfishELO(level int) int {
 	level = normalizeAILevel(level)
 	switch level {
 	case 1:
-		log.Println("masuk ke 1 <<<<<<<<")
 		return 100
 	case 2:
 		return 750

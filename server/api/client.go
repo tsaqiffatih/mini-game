@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"strconv"
 	"sync"
 	"time"
@@ -18,23 +19,33 @@ type Client struct {
 	Send         chan []byte
 	done         chan struct{}
 	close        sync.Once
+	writeMu      sync.Mutex
+}
+
+type clientKey struct {
+	roomID   string
+	playerID string
+}
+
+func newClientKey(roomID string, playerID string) clientKey {
+	return clientKey{roomID: roomID, playerID: playerID}
 }
 
 type ClientRegistry struct {
-	clients     map[string]*Client
-	generations map[string]uint64
+	clients     map[clientKey]*Client
+	generations map[clientKey]uint64
 	mu          sync.RWMutex
 }
 
 func NewClientRegistry() *ClientRegistry {
 	return &ClientRegistry{
-		clients:     make(map[string]*Client),
-		generations: make(map[string]uint64),
+		clients:     make(map[clientKey]*Client),
+		generations: make(map[clientKey]uint64),
 	}
 }
 
 func (r *ClientRegistry) Attach(playerID string, conn *websocket.Conn, pongWait time.Duration) *Client {
-	return r.AttachWithGeneration(playerID, 0, conn, pongWait)
+	return r.AttachWithGenerationInRoom("", playerID, 0, conn, pongWait)
 }
 
 func (r *ClientRegistry) AttachWithGeneration(playerID string, generation uint64, conn *websocket.Conn, pongWait time.Duration) *Client {
@@ -42,15 +53,16 @@ func (r *ClientRegistry) AttachWithGeneration(playerID string, generation uint64
 }
 
 func (r *ClientRegistry) AttachWithGenerationInRoom(roomID string, playerID string, generation uint64, conn *websocket.Conn, pongWait time.Duration) *Client {
+	key := newClientKey(roomID, playerID)
 	if generation == 0 {
-		generation = r.NextGeneration(playerID)
+		generation = r.NextGeneration(roomID, playerID)
 	}
 
 	client := &Client{
 		PlayerID:     playerID,
 		RoomID:       roomID,
 		Generation:   generation,
-		ConnectionID: playerID + "#" + strconv.FormatUint(generation, 10),
+		ConnectionID: roomID + "#" + playerID + "#" + strconv.FormatUint(generation, 10),
 		Conn:         conn,
 		Send:         make(chan []byte, 256),
 		done:         make(chan struct{}),
@@ -59,27 +71,16 @@ func (r *ClientRegistry) AttachWithGenerationInRoom(roomID string, playerID stri
 	conn.SetReadLimit(maxMessageBytes)
 	if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 		observability.Logger().Warn("websocket read deadline setup failed",
-			"room_id", roomID,
-			"player_id", playerID,
-			"event_type", "websocket_read_deadline_error",
-			"generation", generation,
-			"connection_id", client.ConnectionID,
-			"error", err,
-		)
+			"room_id", roomID, "player_id", playerID, "event_type", "websocket_read_deadline_error",
+			"generation", generation, "connection_id", client.ConnectionID, "error", err)
 	}
 	conn.SetPongHandler(func(string) error {
 		if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 			observability.Logger().Warn("websocket pong deadline refresh failed",
-				"room_id", roomID,
-				"player_id", playerID,
-				"event_type", "websocket_pong_deadline_error",
-				"generation", generation,
-				"connection_id", client.ConnectionID,
-				"error", err,
-			)
+				"room_id", roomID, "player_id", playerID, "event_type", "websocket_pong_deadline_error",
+				"generation", generation, "connection_id", client.ConnectionID, "error", err)
 			return err
 		}
-
 		observability.Logger().Debug("websocket pong received",
 			"room_id", roomID,
 			"player_id", playerID,
@@ -100,22 +101,24 @@ func (r *ClientRegistry) AttachWithGenerationInRoom(roomID string, playerID stri
 			"close_reason", text,
 		)
 		message := websocket.FormatCloseMessage(code, "")
-		deadline := time.Now().Add(writeWait)
-		return conn.WriteControl(websocket.CloseMessage, message, deadline)
+		// Use synchronized WriteMessage to prevent race conditions with WritePump or CloseWithCode.
+		_ = client.WriteMessage(websocket.CloseMessage, message, writeWait)
+		return nil
 	})
 
-	var existing *Client
 	r.mu.Lock()
-	if generation > r.generations[playerID] {
-		r.generations[playerID] = generation
+	if generation > r.generations[key] {
+		r.generations[key] = generation
 	}
-	existing = r.clients[playerID]
-	r.clients[playerID] = client
+	existing := r.clients[key]
+	r.clients[key] = client
 	r.mu.Unlock()
 
 	if existing != nil {
-		observability.Logger().Info("websocket duplicate connection replaced",
-			"room_id", existing.RoomID,
+		// Replace the existing client with the new connection.
+		observability.Logger().Info(
+			"websocket duplicate connection replaced",
+			"room_id", roomID,
 			"player_id", playerID,
 			"event_type", "websocket_duplicate_replaced",
 			"close_code", CloseCodeDuplicateConnection,
@@ -123,89 +126,89 @@ func (r *ClientRegistry) AttachWithGenerationInRoom(roomID string, playerID stri
 			"connection_id", client.ConnectionID,
 			"previous_generation", existing.Generation,
 			"previous_connection_id", existing.ConnectionID,
-			"previous_room_id", existing.RoomID,
-			"new_room_id", roomID,
 		)
+		// Close the old client.
 		existing.CloseWithCode(CloseCodeDuplicateConnection, "duplicate connection")
+		// Keep the new client.
+		return client
 	}
+	// No existing client, continue with new client.
 
 	return client
 }
 
-func (r *ClientRegistry) NextGeneration(playerID string) uint64 {
+func (r *ClientRegistry) NextGeneration(roomID string, playerID string) uint64 {
+	key := newClientKey(roomID, playerID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	r.generations[playerID]++
-	return r.generations[playerID]
+	r.generations[key]++
+	return r.generations[key]
 }
 
-func (r *ClientRegistry) Get(playerID string) (*Client, bool) {
+func (r *ClientRegistry) Get(roomID string, playerID string) (*Client, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	client, exists := r.clients[playerID]
+	client, exists := r.clients[newClientKey(roomID, playerID)]
 	return client, exists
 }
 
-func (r *ClientRegistry) IsConnected(playerID string) bool {
-	_, exists := r.Get(playerID)
+func (r *ClientRegistry) IsConnected(roomID string, playerID string) bool {
+	_, exists := r.Get(roomID, playerID)
 	return exists
 }
 
 func (r *ClientRegistry) HasClientInRoom(playerID string, roomID string) bool {
-	client, exists := r.Get(playerID)
-	return exists && client.RoomID == roomID
+	return r.IsConnected(roomID, playerID)
 }
 
-func (r *ClientRegistry) IsCurrentDisconnectedGeneration(playerID string, generation uint64) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	if _, exists := r.clients[playerID]; exists {
-		return false
+func (r *ClientRegistry) IsCurrentDisconnectedGenerationInRoom(roomID string) func(string, uint64) bool {
+	return func(playerID string, generation uint64) bool {
+		key := newClientKey(roomID, playerID)
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+		if _, exists := r.clients[key]; exists {
+			return false
+		}
+		return r.generations[key] == generation
 	}
-	return r.generations[playerID] == generation
 }
 
-func (r *ClientRegistry) Remove(playerID string) {
+func (r *ClientRegistry) Remove(roomID string, playerID string) {
+	key := newClientKey(roomID, playerID)
 	r.mu.Lock()
-	client, exists := r.clients[playerID]
+	client, exists := r.clients[key]
 	if exists {
-		delete(r.clients, playerID)
+		delete(r.clients, key)
 	}
 	r.mu.Unlock()
-
 	if exists {
 		client.Close()
 	}
 }
 
 func (r *ClientRegistry) RemoveClient(client *Client) bool {
+	key := newClientKey(client.RoomID, client.PlayerID)
 	r.mu.Lock()
-	current, exists := r.clients[client.PlayerID]
+	current, exists := r.clients[key]
 	if exists && current == client {
-		delete(r.clients, client.PlayerID)
+		delete(r.clients, key)
 	}
 	r.mu.Unlock()
-
 	if exists && current == client {
 		client.Close()
 		return true
 	}
-
 	return false
 }
 
 func (r *ClientRegistry) CloseAll() {
 	r.mu.Lock()
 	clients := make([]*Client, 0, len(r.clients))
-	for playerID, client := range r.clients {
-		delete(r.clients, playerID)
+	for key, client := range r.clients {
+		delete(r.clients, key)
 		clients = append(clients, client)
 	}
 	r.mu.Unlock()
-
 	for _, client := range clients {
 		client.Close()
 	}
@@ -238,10 +241,23 @@ func (c *Client) Close() {
 	})
 }
 
+func (c *Client) WriteMessage(messageType int, data []byte, timeout time.Duration) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.Conn == nil {
+		return errors.New("connection is nil")
+	}
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	return c.Conn.WriteMessage(messageType, data)
+}
+
 func (c *Client) CloseWithCode(code int, reason string) {
 	c.close.Do(func() {
 		close(c.done)
-		closeWebsocketWithCode(c.Conn, code, reason)
+		message := websocket.FormatCloseMessage(code, reason)
+		_ = c.WriteMessage(websocket.CloseMessage, message, closeFrameWait)
 	})
 }
 
@@ -269,19 +285,7 @@ func (c *Client) WritePump(writeWait time.Duration, pingPeriod time.Duration) {
 		case <-c.done:
 			return
 		case message := <-c.Send:
-			if err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				observability.Logger().Warn("websocket write deadline failed",
-					"room_id", c.RoomID,
-					"player_id", c.PlayerID,
-					"event_type", "websocket_write_error",
-					"generation", c.Generation,
-					"connection_id", c.ConnectionID,
-					"error", err,
-				)
-				return
-			}
-
-			if err := c.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			if err := c.WriteMessage(websocket.TextMessage, message, writeWait); err != nil {
 				observability.Logger().Warn("websocket write failed",
 					"room_id", c.RoomID,
 					"player_id", c.PlayerID,
@@ -294,18 +298,7 @@ func (c *Client) WritePump(writeWait time.Duration, pingPeriod time.Duration) {
 			}
 
 		case <-ticker.C:
-			if err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				observability.Logger().Warn("websocket ping deadline failed",
-					"room_id", c.RoomID,
-					"player_id", c.PlayerID,
-					"event_type", "websocket_ping_error",
-					"generation", c.Generation,
-					"connection_id", c.ConnectionID,
-					"error", err,
-				)
-				return
-			}
-			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := c.WriteMessage(websocket.PingMessage, nil, writeWait); err != nil {
 				observability.Logger().Warn("websocket ping failed",
 					"room_id", c.RoomID,
 					"player_id", c.PlayerID,

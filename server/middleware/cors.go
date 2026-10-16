@@ -19,9 +19,6 @@ func CORSAllowedOrigins() handlers.CORSOption {
 		"event_type", "cors_configured",
 		"allowed_origins", allowedOrigins,
 	)
-	// if allowedOrigins == "" {
-	// 	allowedOrigins = "http://localhost:5173"
-	// }
 	return handlers.AllowedOrigins(origins)
 }
 

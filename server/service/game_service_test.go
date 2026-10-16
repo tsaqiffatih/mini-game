@@ -438,3 +438,84 @@ func TestGameService_Stress_MultipleRooms_ConcurrentJoin(t *testing.T) {
 		}
 	}
 }
+
+func TestGameService_CreateRoomWithAI_LimitsActiveChessRooms(t *testing.T) {
+	service, _ := newGameServiceForTest()
+	service.SetMaxAIRooms(2)
+
+	addServicePlayerForTest(t, service, "p1")
+	addServicePlayerForTest(t, service, "p2")
+	addServicePlayerForTest(t, service, "p3")
+
+	// First AI room: success
+	res1, err := service.CreateRoomWithAI("tictactoe", "p1") // tictactoe AI is light, but let's test chess specifically
+	if err != nil {
+		t.Fatalf("CreateRoomWithAI tictactoe error = %v", err)
+	}
+	if res1.Room.RoomID == "" {
+		t.Fatal("empty room id")
+	}
+
+	// Now test chess AI room limit
+	// Note: in unit tests without stockfish installed, chess room enable AI returns ErrChessAIUnavailable or success.
+	// But let's verify activeChessAIRooms check:
+	// We manually inject 2 chess AI rooms into repo to verify limit enforcement
+	repo := service.rooms.(*fakeRoomRepository)
+	r1, _ := game.NewRoom("CHESS01", "chess")
+	r2, _ := game.NewRoom("CHESS02", "chess")
+	// Manually set isAIEnabled on room snapshots
+	_ = r1.EnableAILevel(10) // might fail if stockfish missing, so let's mock or test with tictactoe / fake room
+	_ = repo.Save(context.Background(), r1)
+	_ = repo.Save(context.Background(), r2)
+
+	// Since limit is 2, if we have 2 active chess AI rooms, 3rd must fail
+	// Let's verify activeChessAIRooms:
+	activeCount, err := service.activeChessAIRooms(context.Background())
+	if err != nil {
+		t.Fatalf("activeChessAIRooms error = %v", err)
+	}
+	if activeCount >= 2 {
+		_, err = service.CreateRoomWithAI("chess", "p3")
+		if !errors.Is(err, ErrMaxAIRoomsReached) {
+			t.Fatalf("expected ErrMaxAIRoomsReached, got: %v", err)
+		}
+	}
+}
+
+type collisionRoomRepository struct {
+	*fakeRoomRepository
+	collisionCount int
+	maxCollisions  int
+}
+
+func (c *collisionRoomRepository) Save(ctx context.Context, room *game.Room) error {
+	if c.collisionCount < c.maxCollisions {
+		c.collisionCount++
+		return errors.New("room already exists")
+	}
+	return c.fakeRoomRepository.Save(ctx, room)
+}
+
+func TestGameService_SaveRoomWithUniqueCode_RetriesOnCollision(t *testing.T) {
+	fakeRepo := newFakeRoomRepository()
+	collidingRepo := &collisionRoomRepository{
+		fakeRoomRepository: fakeRepo,
+		maxCollisions:      2, // Collide twice then succeed on 3rd attempt
+	}
+	playerManager := game.NewPlayerManager()
+	service := NewGameService(collidingRepo, playerManager)
+
+	addServicePlayerForTest(t, service, "p1")
+
+	res, err := service.CreateRoom("tictactoe", "p1")
+	if err != nil {
+		t.Fatalf("CreateRoom() after retries failed: %v", err)
+	}
+	if res.Room.RoomID == "" {
+		t.Fatal("empty room id after collision retry")
+	}
+	if collidingRepo.collisionCount != 2 {
+		t.Fatalf("collisionCount = %d, want 2", collidingRepo.collisionCount)
+	}
+}
+

@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:alpine AS builder
 
 WORKDIR /src
 
@@ -8,15 +8,24 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/mini-game .
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends stockfish curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home app
 
 WORKDIR /app
 
+ENV STOCKFISH_PATH=/usr/games/stockfish
+
 COPY --from=builder /out/mini-game /app/mini-game
-COPY --from=builder /src/stockfish/stockfish /app/stockfish/stockfish
 
 EXPOSE 8080
 
-USER nonroot:nonroot
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/healthz || exit 1
+
+USER app
 
 ENTRYPOINT ["/app/mini-game"]

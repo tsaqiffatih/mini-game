@@ -6,14 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/tsaqiffatih/mini-game/api/dto"
 	"github.com/tsaqiffatih/mini-game/game"
 	"github.com/tsaqiffatih/mini-game/internal/observability"
+	"github.com/tsaqiffatih/mini-game/middleware"
 	"github.com/tsaqiffatih/mini-game/service"
 )
+
+func closeAndLog(conn *websocket.Conn, code int, reason string, ctx context.Context, roomID, playerID string) {
+	closeWebsocketWithCode(conn, code, reason)
+	observability.Logger().InfoContext(ctx, "websocket closed with custom code",
+		"room_id", roomID,
+		"player_id", playerID,
+		"close_code", code,
+		"close_reason", reason,
+	)
+}
 
 type WebSocketMessage struct {
 	Type    string          `json:"type"`
@@ -41,9 +55,53 @@ type ErrorMessage struct {
 }
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
+	// Use custom origin check to enforce allowed origins.
+	CheckOrigin: checkWebSocketOrigin,
+}
+
+func checkWebSocketOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
 		return true
-	},
+	}
+
+	originURL, ok := parseOrigin(origin)
+	if !ok {
+		return false
+	}
+
+	allowedEnv := os.Getenv("ALLOWED_ORIGINS")
+	if allowedEnv == "" {
+		// No allowed origins configured, deny by default
+		return false
+	}
+
+	for _, configuredOrigin := range strings.Split(allowedEnv, ",") {
+		trimmed := strings.TrimSpace(configuredOrigin)
+		if trimmed == "" {
+			continue
+		}
+		allowedURL, ok := parseOrigin(trimmed)
+		if !ok {
+			continue
+		}
+		// Allow exact match or if the origin starts with the allowed URL (handles possible trailing slash)
+		if originURL == allowedURL || strings.HasPrefix(originURL, allowedURL) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func parseOrigin(value string) (string, bool) {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil ||
+		parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), true
 }
 
 const (
@@ -68,9 +126,14 @@ const (
 	CloseCodeInvalidRoom         = 4003
 	CloseCodePlayerNotFound      = 4004
 	CloseCodeDuplicateConnection = 4005
+	CloseCodeUnauthorized        = 4006
+	CloseCodeInternalServerError = 1011 // Standard internal server error
 )
 
-const closeFrameWait = time.Second
+const (
+	closeFrameWait       = time.Second
+	reconnectGracePeriod = 30 * time.Second
+)
 
 func HandleWebSocket(
 	w http.ResponseWriter,
@@ -80,6 +143,7 @@ func HandleWebSocket(
 
 	roomID := r.URL.Query().Get("room_id")
 	playerID := r.URL.Query().Get("player_id")
+	sessionToken := r.URL.Query().Get("session_token")
 	ctx, endSpan := observability.StartSpan(r.Context(), "websocket.connect")
 	var spanErr error
 	defer func() { endSpan(spanErr) }()
@@ -88,25 +152,37 @@ func HandleWebSocket(
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		spanErr = err
+		closeAndLog(conn, CloseCodeInternalServerError, "upgrade failed", ctx, roomID, playerID)
 		observability.Logger().WarnContext(ctx, "websocket upgrade failed",
 			"room_id", roomID,
 			"player_id", playerID,
 			"event_type", "websocket_upgrade_failed",
 			"error", err,
 		)
+
 		return
 	}
 	defer conn.Close()
 
-	if code, reason, ok := validateWebSocketIDs(roomID, playerID); !ok {
-		observability.Logger().WarnContext(ctx, "websocket validation failed",
+	if roomID == "" || !validRoomID(roomID) {
+		closeWebsocketWithCode(conn, CloseCodeInvalidRoom, "invalid room id")
+		return
+	}
+
+	// Strict validation of room and player IDs
+	if !validateRoomAndPlayerIDs(w, roomID, playerID) {
+		return
+	}
+
+	if !middleware.VerifySessionToken(gameService, playerID, sessionToken) {
+		spanErr = errors.New("unauthorized")
+		observability.Logger().WarnContext(ctx, "websocket authentication rejected",
 			"room_id", roomID,
 			"player_id", playerID,
-			"event_type", "websocket_validation_failed",
-			"close_code", code,
-			"close_reason", reason,
+			"event_type", "websocket_authentication_rejected",
+			"close_code", CloseCodeUnauthorized,
 		)
-		closeWebsocketWithCode(conn, code, reason)
+		closeWebsocketWithCode(conn, CloseCodeUnauthorized, "unauthorized")
 		return
 	}
 
@@ -126,8 +202,8 @@ func HandleWebSocket(
 		return
 	}
 
-	generation := clients.NextGeneration(playerID)
-	wasConnected := clients.IsConnected(playerID)
+	generation := clients.NextGeneration(roomID, playerID)
+	wasConnected := clients.IsConnected(roomID, playerID)
 	isReconnectReplacement := clients.HasClientInRoom(playerID, roomID)
 	wasDisconnected := player.Session == game.PlayerSessionDisconnected
 	if err := gameService.MarkPlayerConnectedWithContext(ctx, roomID, playerID); err != nil {
@@ -184,14 +260,16 @@ func closeWebsocketWithCode(conn *websocket.Conn, code int, reason string) {
 		return
 	}
 
+	// Send a close frame with the provided code and reason.
 	message := websocket.FormatCloseMessage(code, reason)
-	deadline := time.Now().Add(closeFrameWait)
-	_ = conn.WriteControl(websocket.CloseMessage, message, deadline)
-	_ = conn.Close()
+	_ = conn.SetWriteDeadline(time.Now().Add(closeFrameWait))
+	_ = conn.WriteMessage(websocket.CloseMessage, message)
+	// Give a brief delay so close frame can be transmitted before socket closes
+	time.Sleep(20 * time.Millisecond)
 }
 
 func validateWebSocketIDs(roomID string, playerID string) (int, string, bool) {
-	if roomID == "" {
+	if !validRoomID(roomID) {
 		return CloseCodeInvalidRoom, "invalid room", false
 	}
 	if playerID == "" {
@@ -247,7 +325,7 @@ func handlePlayerDisconnection(ctx context.Context, clients *ClientRegistry, gam
 		"generation", client.Generation,
 		"connection_id", client.ConnectionID,
 	)
-	gameService.RemovePlayerAfterDelayForGenerationWithCallback(roomID, playerID, client.Generation, 30*time.Second, clients.IsCurrentDisconnectedGeneration, func() {
+	gameService.RemovePlayerAfterDelayForGenerationWithCallback(roomID, playerID, client.Generation, reconnectGracePeriod, clients.IsCurrentDisconnectedGenerationInRoom(roomID), func() {
 		NotifyToClientsInRoom(clients, gameService, roomID, EventPlayerLeft, EventPayload{
 			Message:   fmt.Sprintf("Player %s left the room", playerID),
 			Player:    playerEventDTO(player),

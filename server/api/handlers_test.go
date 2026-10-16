@@ -68,6 +68,9 @@ func registerAPITestAliases(router *mux.Router, gameService *service.GameService
 			sendErrorResponse(w, "Invalid request", http.StatusBadRequest)
 			return
 		}
+		if !authenticateHTTPPlayer(w, r, gameService, request.PlayerID) {
+			return
+		}
 
 		res, err := gameService.JoinRoom(mux.Vars(r)["room_id"], request.PlayerID, request.GameType)
 		if err != nil {
@@ -92,6 +95,9 @@ func registerAPITestAliases(router *mux.Router, gameService *service.GameService
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			sendErrorResponse(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+		if !authenticateHTTPPlayer(w, r, gameService, request.PlayerID) {
 			return
 		}
 
@@ -142,7 +148,7 @@ func registerPlayerViaAPI(t *testing.T, server apiTestServer, playerID string) {
 func createRoomViaAPI(t *testing.T, server apiTestServer, playerID string) joinRoomAPIData {
 	t.Helper()
 
-	recorder := doJSONRequest(t, server.router, http.MethodPost, "/rooms", map[string]string{
+	recorder := doAuthenticatedJSONRequest(t, server, http.MethodPost, "/rooms", playerID, map[string]string{
 		"game_type": "tictactoe",
 		"player_id": playerID,
 	})
@@ -170,7 +176,7 @@ func createRoomViaAPI(t *testing.T, server apiTestServer, playerID string) joinR
 func joinRoomViaAPI(t *testing.T, server apiTestServer, roomID string, playerID string) joinRoomAPIData {
 	t.Helper()
 
-	recorder := doJSONRequest(t, server.router, http.MethodPost, "/rooms/"+roomID+"/join", map[string]string{
+	recorder := doAuthenticatedJSONRequest(t, server, http.MethodPost, "/rooms/"+roomID+"/join", playerID, map[string]string{
 		"game_type": "tictactoe",
 		"player_id": playerID,
 	})
@@ -195,7 +201,7 @@ func joinRoomViaAPI(t *testing.T, server apiTestServer, roomID string, playerID 
 func moveViaAPI(t *testing.T, server apiTestServer, roomID string, playerID string, row int, col int) moveAPIResponse {
 	t.Helper()
 
-	recorder := doJSONRequest(t, server.router, http.MethodPost, "/rooms/"+roomID+"/move", map[string]interface{}{
+	recorder := doAuthenticatedJSONRequest(t, server, http.MethodPost, "/rooms/"+roomID+"/move", playerID, map[string]interface{}{
 		"player_id": playerID,
 		"row":       row,
 		"col":       col,
@@ -218,7 +224,20 @@ func moveViaAPI(t *testing.T, server apiTestServer, roomID string, playerID stri
 	return data
 }
 
+func doAuthenticatedJSONRequest(t *testing.T, server apiTestServer, method string, path string, playerID string, body interface{}) *httptest.ResponseRecorder {
+	t.Helper()
+	token, err := server.service.SessionTokenForPlayer(playerID)
+	if err != nil {
+		t.Fatalf("session token for %s: %v", playerID, err)
+	}
+	return doJSONRequestWithToken(t, server.router, method, path, body, token)
+}
+
 func doJSONRequest(t *testing.T, handler http.Handler, method string, path string, body interface{}) *httptest.ResponseRecorder {
+	return doJSONRequestWithToken(t, handler, method, path, body, "")
+}
+
+func doJSONRequestWithToken(t *testing.T, handler http.Handler, method string, path string, body interface{}, token string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	encodedBody, err := json.Marshal(body)
@@ -228,6 +247,9 @@ func doJSONRequest(t *testing.T, handler http.Handler, method string, path strin
 
 	request := httptest.NewRequest(method, path, bytes.NewReader(encodedBody))
 	request.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 
@@ -239,6 +261,22 @@ func decodeJSONResponse(t *testing.T, recorder *httptest.ResponseRecorder, targe
 
 	if err := json.NewDecoder(recorder.Body).Decode(target); err != nil {
 		t.Fatalf("decode response JSON: %v; body=%s", err, recorder.Body.String())
+	}
+}
+
+func TestHealthAndHealthzEndpoints(t *testing.T) {
+	server := newAPITestServer()
+
+	for _, path := range []string{"/health", "/healthz"} {
+		rec := doJSONRequest(t, server.router, http.MethodGet, path, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want %d", path, rec.Code, http.StatusOK)
+		}
+		var res apiResponse
+		decodeJSONResponse(t, rec, &res)
+		if !res.Success {
+			t.Fatalf("%s response success = false, want true", path)
+		}
 	}
 }
 
@@ -285,7 +323,7 @@ func TestRecoverRoomAPI(t *testing.T) {
 	registerPlayerViaAPI(t, server, "p1")
 	created := createRoomViaAPI(t, server, "p1")
 
-	recorder := doJSONRequest(t, server.router, http.MethodPost, "/room/recover", map[string]string{
+	recorder := doAuthenticatedJSONRequest(t, server, http.MethodPost, "/room/recover", "p1", map[string]string{
 		"game_type": "tictactoe",
 		"player_id": "p1",
 		"room_id":   created.Room.RoomID,
@@ -329,10 +367,10 @@ func TestRecoverRoomAPI_StaleRoomReturnsNotFound(t *testing.T) {
 	server := newAPITestServer()
 	registerPlayerViaAPI(t, server, "p1")
 
-	recorder := doJSONRequest(t, server.router, http.MethodPost, "/room/recover", map[string]string{
+	recorder := doAuthenticatedJSONRequest(t, server, http.MethodPost, "/room/recover", "p1", map[string]string{
 		"game_type": "tictactoe",
 		"player_id": "p1",
-		"room_id":   "missing",
+		"room_id":   "MISSING",
 	})
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("recover stale room status = %d, want %d; body=%s", recorder.Code, http.StatusNotFound, recorder.Body.String())
@@ -374,5 +412,46 @@ func TestFullGameFlowAPI(t *testing.T) {
 	}
 	if result.Winner == "" {
 		t.Fatalf("winner is empty")
+	}
+}
+
+func TestProtectedHTTPRoutesRequireMatchingSessionToken(t *testing.T) {
+	server := newAPITestServer()
+	registerPlayerViaAPI(t, server, "player-a")
+	registerPlayerViaAPI(t, server, "player-b")
+
+	tokenA, err := server.service.SessionTokenForPlayer("player-a")
+	if err != nil {
+		t.Fatalf("SessionTokenForPlayer(player-a) error = %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		token string
+		id    string
+	}{
+		{name: "valid token", token: tokenA, id: "player-a"},
+		{name: "invalid token", token: "not-a-valid-session-token", id: "player-a"},
+		{name: "missing token", token: "", id: "player-a"},
+		{name: "cross-player token", token: tokenA, id: "player-b"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := doJSONRequestWithToken(t, server.router, http.MethodPost, "/room/create", map[string]string{
+				"game_type": "tictactoe",
+				"player_id": test.id,
+			}, test.token)
+
+			if test.name == "valid token" {
+				if recorder.Code != http.StatusCreated {
+					t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusCreated, recorder.Body.String())
+				}
+				return
+			}
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+			}
+		})
 	}
 }

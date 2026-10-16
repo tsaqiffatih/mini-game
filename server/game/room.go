@@ -20,11 +20,15 @@ const (
 	RoomStateResetting RoomState = "RESETTING"
 )
 
+var ErrChessAIUnavailable = errors.New("chess AI is unavailable")
+
 const (
 	DefaultFinishedResetDelay = 5 * time.Second
 	DefaultResettingDelay     = 3 * time.Second
 	DefaultAILevel            = 10
 	DefaultAIMoveDelay        = 1000 * time.Millisecond
+	MinAILevel                = 1
+	MaxAILevel                = 10
 )
 
 type Room struct {
@@ -489,15 +493,20 @@ func (r *Room) notifyStateChanged() {
 	notifier(r.Snapshot())
 }
 
+// ValidAILevel reports whether level is a supported AI difficulty.
+func ValidAILevel(level int) bool {
+	return level >= MinAILevel && level <= MaxAILevel
+}
+
 func normalizeAILevel(level int) int {
 	if level == 0 {
 		return DefaultAILevel
 	}
-	if level < 1 {
-		return 1
+	if level < MinAILevel {
+		return MinAILevel
 	}
-	if level > 10 {
-		return 10
+	if level > MaxAILevel {
+		return MaxAILevel
 	}
 	return level
 }

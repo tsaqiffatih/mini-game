@@ -1,9 +1,0 @@
-.env
-node_modules/
-build/
-features.md
-test.md
-note.md
-endpoint-flow.md
-tmp
-bin

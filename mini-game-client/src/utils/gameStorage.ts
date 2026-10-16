@@ -1,5 +1,20 @@
 
 
+const playerSessionTokenKey = "sessionToken";
+
+export const getPlayerSessionToken = () =>
+  localStorage.getItem(playerSessionTokenKey);
+
+export const clearPlayerSession = () => {
+  localStorage.removeItem("playerId");
+  localStorage.removeItem(playerSessionTokenKey);
+};
+
+export const getAuthorizationHeaders = () => {
+  const token = getPlayerSessionToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 export const getGameStorageKeys = (gameType: string) => ({
   roomId: `${gameType}.roomId`,
   playerMark: `${gameType}.playerMark`,

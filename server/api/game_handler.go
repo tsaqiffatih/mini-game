@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 
 	"github.com/tsaqiffatih/mini-game/actions"
@@ -14,7 +16,7 @@ import (
 
 // Shared utility functions
 func parsePayload(ctx context.Context, client *Client, roomID, eventType string, rawMessage json.RawMessage, payload interface{}) bool {
-	if err := json.Unmarshal(rawMessage, payload); err != nil {
+	if err := decodeWebSocketPayload(rawMessage, payload); err != nil {
 		sendErrorMessage(client, "Failed to unmarshal JSON into payload struct")
 		observability.Logger().WarnContext(ctx, "websocket payload unmarshal failed",
 			"room_id", roomID,
@@ -25,6 +27,18 @@ func parsePayload(ctx context.Context, client *Client, roomID, eventType string,
 		return false
 	}
 	return true
+}
+
+func decodeWebSocketPayload(rawMessage json.RawMessage, payload interface{}) error {
+	decoder := json.NewDecoder(strings.NewReader(string(rawMessage)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(payload); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("payload must contain one JSON value")
+	}
+	return nil
 }
 
 // TicTacToe-related functions
@@ -110,7 +124,7 @@ func processChessMove(
 	message WebSocketMessage) {
 
 	var payload dto.ChessMovePayload
-	if err := json.Unmarshal(message.Payload, &payload); err != nil {
+	if err := decodeWebSocketPayload(message.Payload, &payload); err != nil {
 		sendChessMoveRejectedWithCode(client, roomID, playerID, payload, "invalid_payload", "Invalid chess move payload")
 		observability.Logger().WarnContext(ctx, "websocket chess move payload unmarshal failed",
 			"room_id", roomID,
